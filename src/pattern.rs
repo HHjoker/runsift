@@ -1,0 +1,120 @@
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use regex::Regex;
+
+use crate::logs::stable_id;
+use crate::model::{Event, Pattern};
+
+static TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b")
+        .unwrap()
+});
+static UUID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
+        .unwrap()
+});
+static IPV4: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap());
+static HEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b0x[0-9a-f]+\b").unwrap());
+static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:\d+\.\d+|\d+)\b").unwrap());
+static SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+").unwrap());
+
+#[derive(Debug)]
+struct Accumulator {
+    pattern: Pattern,
+}
+
+pub fn aggregate(events: &[Event]) -> Vec<Pattern> {
+    let mut patterns = HashMap::<String, Accumulator>::new();
+
+    for event in events {
+        let template = normalize(&event.message);
+        let key = format!("{:?}:{template}", event.severity);
+        let pattern_id = stable_id("pat", &key);
+        let entry = patterns.entry(key).or_insert_with(|| Accumulator {
+            pattern: Pattern {
+                pattern_id,
+                severity: event.severity,
+                template,
+                count: 0,
+                first_observed_at: event.observed_at,
+                last_observed_at: event.observed_at,
+                representative_event_ids: Vec::new(),
+            },
+        });
+
+        entry.pattern.count += 1;
+        entry.pattern.first_observed_at = entry.pattern.first_observed_at.min(event.observed_at);
+        entry.pattern.last_observed_at = entry.pattern.last_observed_at.max(event.observed_at);
+        if entry.pattern.representative_event_ids.len() < 3 {
+            entry
+                .pattern
+                .representative_event_ids
+                .push(event.event_id.clone());
+        }
+    }
+
+    let mut result: Vec<_> = patterns.into_values().map(|entry| entry.pattern).collect();
+    result.sort_by(|left, right| {
+        right
+            .severity
+            .priority()
+            .cmp(&left.severity.priority())
+            .then_with(|| right.count.cmp(&left.count))
+            .then_with(|| left.pattern_id.cmp(&right.pattern_id))
+    });
+    result
+}
+
+pub fn normalize(message: &str) -> String {
+    let message = message.lines().next().unwrap_or(message);
+    let value = TIMESTAMP.replace_all(message, "<timestamp>");
+    let value = UUID.replace_all(&value, "<uuid>");
+    let value = IPV4.replace_all(&value, "<ip>");
+    let value = HEX.replace_all(&value, "<hex>");
+    let value = NUMBER.replace_all(&value, "<num>");
+    SPACES.replace_all(value.trim(), " ").into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::{aggregate, normalize};
+    use crate::model::{Event, EvidenceRef, Severity};
+
+    #[test]
+    fn normalizes_dynamic_values() {
+        assert_eq!(
+            normalize("2026-07-30 10:20:30.123 error id=42 addr=0x7ffe ip=10.0.0.1"),
+            "<timestamp> error id=<num> addr=<hex> ip=<ip>"
+        );
+    }
+
+    #[test]
+    fn stacktrace_does_not_split_the_error_pattern() {
+        let event = |id: &str, message: &str| Event {
+            event_id: id.to_owned(),
+            observed_at: Utc::now(),
+            timestamp: None,
+            severity: Severity::Error,
+            source: "app.log".to_owned(),
+            thread_id: None,
+            message: message.to_owned(),
+            evidence: EvidenceRef {
+                artifact: "app.log".to_owned(),
+                source_path: "app.log".into(),
+                byte_start: 0,
+                byte_end: 1,
+            },
+        };
+        let patterns = aggregate(&[
+            event("one", "[error] invalid length 18\n  at parser.cpp:42"),
+            event("two", "[error] invalid length 21"),
+        ]);
+
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].count, 2);
+    }
+}
