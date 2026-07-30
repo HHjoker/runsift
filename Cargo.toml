@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Turn failed local runs into compact, traceable evidence bundles"
 license = "Apache-2.0"
+homepage = "https://github.com/HHjoker/runsift"
+repository = "https://github.com/HHjoker/runsift"
 
 [dependencies]
 anyhow = "1.0"

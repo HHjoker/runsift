@@ -87,7 +87,7 @@ failed-run organizer and log compactor.
 ### Build
 
 ```bash
-git clone <your-runsift-repository>
+git clone https://github.com/HHjoker/runsift.git
 cd runsift
 cargo build --release
 ```
