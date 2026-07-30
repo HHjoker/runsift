@@ -1,0 +1,12 @@
+pub mod capture;
+pub mod cli;
+pub mod crash;
+pub mod diagnostics;
+pub mod git;
+pub mod logs;
+pub mod model;
+pub mod pattern;
+pub mod profile;
+pub mod redact;
+pub mod report;
+pub mod test_report;

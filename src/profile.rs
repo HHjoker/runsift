@@ -115,15 +115,3 @@ fn parse_offset(value: &str) -> Result<FixedOffset> {
         FixedOffset::east_opt(seconds).context("timezone is out of range")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::parse_offset;
-
-    #[test]
-    fn parses_timezone_offsets() {
-        assert_eq!(parse_offset("+08:00").unwrap().local_minus_utc(), 28_800);
-        assert_eq!(parse_offset("-0530").unwrap().local_minus_utc(), -19_800);
-        assert!(parse_offset("UTC").is_err());
-    }
-}

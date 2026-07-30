@@ -89,7 +89,7 @@ pub fn import(path: &Path, artifact: String, redact_enabled: bool) -> Result<Imp
     let passed = tests.len() - failed - errors - skipped;
 
     Ok(ImportedTestReport {
-        content: redact::text(&content, redact_enabled),
+        content: redact_xml(&content, redact_enabled),
         report: TestReport {
             source_path: path.to_path_buf(),
             artifact,
@@ -102,6 +102,12 @@ pub fn import(path: &Path, artifact: String, redact_enabled: bool) -> Result<Imp
             tests,
         },
     })
+}
+
+fn redact_xml(content: &str, enabled: bool) -> String {
+    redact::text(content, enabled)
+        .replace("<redacted>", "&lt;redacted&gt;")
+        .replace("<redacted-jwt>", "&lt;redacted-jwt&gt;")
 }
 
 pub fn artifact(index: usize, path: &Path) -> String {
@@ -187,72 +193,5 @@ fn detect_framework(path: &Path, content: &str) -> TestFramework {
         TestFramework::CTest
     } else {
         TestFramework::JUnit
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::import;
-    use crate::model::{TestFramework, TestStatus};
-
-    #[test]
-    fn parses_googletest_junit_xml() {
-        let path = std::env::temp_dir().join(format!(
-            "runsift-gtest-{}-{}.xml",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        fs::write(
-            &path,
-            r#"<?xml version="1.0"?>
-<testsuites tests="2" failures="1" name="AllTests">
-  <testsuite name="ParserTest" tests="2">
-    <testcase name="AcceptsValid" status="run" result="completed" time="0.005"/>
-    <testcase name="RejectsBad" status="run" result="completed" time="0.010">
-      <failure message="password=hunter2">expected true</failure>
-    </testcase>
-  </testsuite>
-</testsuites>"#,
-        )
-        .unwrap();
-
-        let report = import(&path, "tests/000-gtest.xml".to_owned(), true)
-            .unwrap()
-            .report;
-        let _ = fs::remove_file(path);
-        assert_eq!(report.framework, TestFramework::GoogleTest);
-        assert_eq!(report.total, 2);
-        assert_eq!(report.failed, 1);
-        assert_eq!(report.tests[1].status, TestStatus::Failed);
-        assert_eq!(
-            report.tests[1].message.as_deref(),
-            Some("password=<redacted>")
-        );
-    }
-
-    #[test]
-    fn parses_ctest_junit_xml() {
-        let path = std::env::temp_dir().join(format!(
-            "runsift-ctest-{}-{}.xml",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        fs::write(
-            &path,
-            r#"<testsuite name="CTest" tests="1" failures="0">
-  <testcase name="Parser.AcceptsValid" classname="Parser" time="0.025"/>
-</testsuite>"#,
-        )
-        .unwrap();
-
-        let report = import(&path, "tests/000-ctest.xml".to_owned(), true)
-            .unwrap()
-            .report;
-        let _ = fs::remove_file(path);
-        assert_eq!(report.framework, TestFramework::CTest);
-        assert_eq!(report.passed, 1);
-        assert_eq!(report.tests[0].duration_ms, Some(25.0));
     }
 }

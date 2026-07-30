@@ -27,23 +27,3 @@ pub fn text(input: &str, enabled: bool) -> String {
         })
         .into_owned()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::text;
-
-    #[test]
-    fn redacts_common_secrets() {
-        let value = "Authorization: Bearer abcdefghijklmnop api_key=secret-value";
-        let redacted = text(value, true);
-        assert_eq!(
-            redacted,
-            "Authorization: Bearer <redacted> api_key=<redacted>"
-        );
-    }
-
-    #[test]
-    fn can_be_disabled() {
-        assert_eq!(text("password=hunter2", false), "password=hunter2");
-    }
-}

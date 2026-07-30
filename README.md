@@ -16,7 +16,8 @@ verifiable evidence of what happened during a failed run.
 
 > [!IMPORTANT]
 > RunSift is at an early stage. Evidence schemas and command-line options may
-> change before `1.0`. RunSift `0.2` writes evidence schema version `2`.
+> change before `1.0`. The Rust library API is also experimental. RunSift
+> `0.2` writes evidence schema version `2`.
 
 ## Why RunSift?
 
@@ -449,6 +450,18 @@ require replacing spdlog or modifying C++ business logic.
 The roadmap communicates direction, not compatibility or delivery commitments.
 
 ## Development
+
+The crate keeps production code and tests separate:
+
+```text
+src/
+├── lib.rs          # reusable collection and parsing library
+├── main.rs         # thin CLI entry point
+└── *.rs            # production modules
+tests/
+├── support/        # shared test utilities
+└── *.rs            # black-box integration tests
+```
 
 ```bash
 cargo fmt -- --check

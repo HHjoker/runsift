@@ -1,22 +1,10 @@
-mod capture;
-mod cli;
-mod crash;
-mod diagnostics;
-mod git;
-mod logs;
-mod model;
-mod pattern;
-mod profile;
-mod redact;
-mod report;
-mod test_report;
-
 use std::process;
 
 use anyhow::Result;
 use clap::Parser;
 
-use crate::cli::{Cli, Command};
+use runsift::capture;
+use runsift::cli::{Cli, Command};
 
 fn main() {
     match try_main() {
