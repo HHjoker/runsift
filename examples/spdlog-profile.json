@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "spdlog-pipe",
+  "pattern": "^(?P<timestamp>[^|]+) \\| (?P<level>[^|]+) \\| (?P<thread>[^|]+) \\| (?P<logger>[^|]+) \\| (?P<message>.*)$",
+  "timestamp_format": "%Y-%m-%d %H:%M:%S%.3f",
+  "timezone": "+08:00"
+}

@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -10,12 +9,16 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 
 use crate::cli::RunArgs;
+use crate::crash;
+use crate::diagnostics;
 use crate::git;
-use crate::logs::{self, Snapshot};
-use crate::model::{CommandResult, Manifest};
+use crate::logs;
+use crate::model::{CommandResult, CorrelationContext, CrashEvidence, Manifest};
 use crate::pattern;
+use crate::profile::LogProfile;
 use crate::redact;
 use crate::report;
+use crate::test_report;
 
 #[derive(Debug, Clone, Copy)]
 enum Stream {
@@ -36,14 +39,45 @@ pub fn run(args: RunArgs) -> Result<i32> {
         .context("a command is required after `--`")?;
     let cwd = std::env::current_dir().context("failed to determine working directory")?;
     let started_at = Utc::now();
-    let run_id = format!(
-        "run_{}_{}",
-        started_at.format("%Y%m%dT%H%M%S%.3fZ"),
-        std::process::id()
-    );
+    let run_id = match args.run_id.as_deref() {
+        Some(value) => validate_id("run ID", value)?,
+        None => format!(
+            "run_{}_{}",
+            started_at.format("%Y%m%dT%H%M%S%.3fZ"),
+            std::process::id()
+        ),
+    };
+    let context = CorrelationContext {
+        run_id: run_id.clone(),
+        batch_id: args
+            .batch_id
+            .as_deref()
+            .map(|value| validate_id("batch ID", value))
+            .transpose()?,
+        test_id: args
+            .test_id
+            .as_deref()
+            .map(|value| validate_id("test ID", value))
+            .transpose()?,
+    };
     let bundle_dir = args.output.join(&run_id);
+    if bundle_dir.exists() {
+        bail!(
+            "evidence bundle {} already exists; choose a different run ID",
+            bundle_dir.display()
+        );
+    }
     fs::create_dir_all(bundle_dir.join("logs"))
         .with_context(|| format!("failed to create {}", bundle_dir.display()))?;
+    fs::create_dir_all(bundle_dir.join("debugger"))
+        .with_context(|| format!("failed to create {}", bundle_dir.display()))?;
+    fs::create_dir_all(bundle_dir.join("tests"))
+        .with_context(|| format!("failed to create {}", bundle_dir.display()))?;
+    let log_profile = args
+        .log_profile
+        .as_deref()
+        .map(LogProfile::load)
+        .transpose()?;
 
     let snapshots = args
         .logs
@@ -105,6 +139,8 @@ pub fn run(args: RunArgs) -> Result<i32> {
         0,
         &captured_stdout,
         finished_at,
+        log_profile.as_ref(),
+        &context,
     ));
     events.extend(logs::parse_events(
         &bundle_dir.join("stderr.log"),
@@ -112,6 +148,8 @@ pub fn run(args: RunArgs) -> Result<i32> {
         0,
         &captured_stderr,
         finished_at,
+        log_profile.as_ref(),
+        &context,
     ));
 
     let mut sources = Vec::new();
@@ -120,19 +158,31 @@ pub fn run(args: RunArgs) -> Result<i32> {
         "summary.md".to_owned(),
         "events.jsonl".to_owned(),
         "patterns.json".to_owned(),
+        "tests.json".to_owned(),
+        "diagnostics.json".to_owned(),
+        "crash.json".to_owned(),
         "stdout.log".to_owned(),
         "stderr.log".to_owned(),
     ];
 
     for (index, snapshot) in snapshots.into_iter().enumerate() {
-        match collect_log(snapshot, index, finished_at, redact_enabled) {
-            Ok(delta) => {
-                let path = bundle_dir.join(&delta.artifact);
-                fs::write(&path, &delta.content)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
-                artifacts.push(delta.artifact);
-                events.extend(delta.events);
-                sources.push(delta.summary);
+        match logs::collect(
+            snapshot,
+            &format!("logs/{index:03}"),
+            finished_at,
+            redact_enabled,
+            log_profile.as_ref(),
+            &context,
+        ) {
+            Ok(collected) => {
+                for delta in collected.deltas {
+                    let path = bundle_dir.join(&delta.artifact);
+                    fs::write(&path, &delta.content)
+                        .with_context(|| format!("failed to write {}", path.display()))?;
+                    artifacts.push(delta.artifact);
+                    events.extend(delta.events);
+                }
+                sources.push(collected.summary);
             }
             Err(error) => eprintln!("runsift: warning: {error:#}"),
         }
@@ -145,6 +195,58 @@ pub fn run(args: RunArgs) -> Result<i32> {
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     let patterns = pattern::aggregate(&events);
+    let diagnostics = diagnostics::parse(
+        &captured_stderr,
+        &bundle_dir.join("stderr.log"),
+        "stderr.log",
+        &context,
+        &events,
+    );
+
+    let mut test_reports = Vec::new();
+    for (index, path) in args.test_reports.iter().enumerate() {
+        let artifact = test_report::artifact(index, path);
+        match test_report::import(path, artifact.clone(), redact_enabled) {
+            Ok(imported) => {
+                fs::write(bundle_dir.join(&artifact), imported.content)?;
+                artifacts.push(artifact);
+                test_reports.push(imported.report);
+            }
+            Err(error) => eprintln!(
+                "runsift: warning: failed to parse test report {}: {error:#}",
+                path.display()
+            ),
+        }
+    }
+
+    let mut core_dumps = Vec::new();
+    for path in &args.core_dumps {
+        match crash::inspect_core(path) {
+            Ok(value) => core_dumps.push(value),
+            Err(error) => eprintln!("runsift: warning: {error:#}"),
+        }
+    }
+    let mut debugger_reports = Vec::new();
+    for (index, path) in args.debugger_reports.iter().enumerate() {
+        let artifact = crash::debugger_artifact(index, path);
+        match crash::import_debugger_report(path, artifact.clone(), &context, redact_enabled) {
+            Ok(imported) => {
+                fs::write(bundle_dir.join(&artifact), imported.content)?;
+                artifacts.push(artifact);
+                debugger_reports.push(imported.report);
+            }
+            Err(error) => eprintln!("runsift: warning: {error:#}"),
+        }
+    }
+    let crash_evidence = CrashEvidence {
+        core_dumps,
+        debugger_reports,
+    };
+    let test_count = test_reports.iter().map(|value| value.total).sum();
+    let failed_test_count = test_reports
+        .iter()
+        .map(|value| value.failed + value.errors)
+        .sum();
 
     let command_result = CommandResult {
         program: display(program),
@@ -153,8 +255,9 @@ pub fn run(args: RunArgs) -> Result<i32> {
         success: status.success(),
     };
     let manifest = Manifest {
-        schema_version: 1,
-        run_id,
+        schema_version: 2,
+        run_id: run_id.clone(),
+        context,
         started_at,
         finished_at,
         working_directory: cwd,
@@ -164,46 +267,38 @@ pub fn run(args: RunArgs) -> Result<i32> {
         sources,
         event_count: events.len(),
         pattern_count: patterns.len(),
+        test_count,
+        failed_test_count,
+        diagnostic_count: diagnostics.len(),
+        core_dump_count: crash_evidence.core_dumps.len(),
+        debugger_report_count: crash_evidence.debugger_reports.len(),
+        log_profile: log_profile.map(|value| value.name().to_owned()),
         artifacts,
     };
-    report::write_bundle(&bundle_dir, &manifest, &events, &patterns)?;
+    report::write_bundle(
+        &bundle_dir,
+        &manifest,
+        &events,
+        &patterns,
+        &test_reports,
+        &diagnostics,
+        &crash_evidence,
+    )?;
 
     eprintln!("runsift: evidence bundle: {}", bundle_dir.display());
     Ok(status.code().unwrap_or(1))
 }
 
-fn collect_log(
-    snapshot: Snapshot,
-    index: usize,
-    observed_at: chrono::DateTime<Utc>,
-    redact_enabled: bool,
-) -> Result<logs::Delta> {
-    let artifact = format!(
-        "logs/{index:03}-{}",
-        artifact_name(snapshot_path(&snapshot))
-    );
-    logs::collect_delta(snapshot, artifact, observed_at, redact_enabled)
-}
-
-fn snapshot_path(snapshot: &Snapshot) -> &Path {
-    // Kept private to this module through the stable debug-independent accessor below.
-    snapshot.path()
-}
-
-fn artifact_name(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("application.log");
-    name.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn validate_id(label: &str, value: &str) -> Result<String> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'));
+    if !valid {
+        bail!("{label} must contain 1-128 ASCII letters, digits, '-' or '_'");
+    }
+    Ok(value.to_owned())
 }
 
 fn spawn_reader<R>(

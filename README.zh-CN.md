@@ -12,6 +12,7 @@ AI 获得完整、精简并且可以回到原始现场的证据。
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段，证据格式和命令行参数在 `1.0` 之前可能调整。
+> RunSift `0.2` 生成的证据格式版本为 `2`。
 
 ## 为什么需要 RunSift
 
@@ -51,7 +52,7 @@ CTest / 可执行程序
 └── 其他分析工具
 ```
 
-## 第一阶段已经实现
+## 已实现能力
 
 | 能力 | 当前行为 |
 |---|---|
@@ -69,6 +70,17 @@ CTest / 可执行程序
 
 这些能力不依赖 AI，即使只用于压缩日志和整理失败现场也可以独立工作。
 
+第二阶段增加了面向 C++ 工程的上下文：
+
+| 能力 | 当前行为 |
+|---|---|
+| CTest 和 GoogleTest | 将 JUnit XML 导入为稳定的测试用例记录 |
+| spdlog profile | 通过具名捕获的 JSON profile 解析项目自定义格式 |
+| Sanitizer | 提取 ASan、UBSan、TSan 问题及其调用栈 |
+| 崩溃上下文 | 记录 core 元数据并导入 GDB/LLDB 文本报告 |
+| 上下文关联 | 将 `run_id`、`batch_id`、`test_id` 传递到证据中 |
+| 日志轮转 | 在类 Unix 系统利用文件身份找回 rename 轮转前后的两段日志 |
+
 ## 快速开始
 
 ### 环境要求
@@ -80,7 +92,7 @@ CTest / 可执行程序
 ### 构建
 
 ```bash
-git clone <your-runsift-repository>
+git clone https://github.com/HHjoker/runsift.git
 cd runsift
 cargo build --release
 ```
@@ -135,6 +147,44 @@ touch build/logs/application.log
   ctest --test-dir build --output-on-failure
 ```
 
+### 采集结构化 C++ 测试和运行证据
+
+CTest 可以在 RunSift 采集本次运行时同步生成 JUnit XML：
+
+```bash
+./target/release/runsift run \
+  --test-report build/ctest-results.xml \
+  --batch-id ci-4821 \
+  -- \
+  ctest --test-dir build \
+    --output-on-failure \
+    --output-junit build/ctest-results.xml
+```
+
+GoogleTest 使用其 XML 输出：
+
+```bash
+./target/release/runsift run \
+  --test-report build/gtest-results.xml \
+  --test-id parser-suite \
+  -- \
+  ./build/parser_tests --gtest_output=xml:build/gtest-results.xml
+```
+
+写入 stderr 的 ASan、UBSan、TSan 报告会被自动识别。已有的 core dump 和调试器
+报告可以通过 `--core` 与 `--debugger-report` 附加：
+
+```bash
+runsift run \
+  --core build/core.1234 \
+  --debugger-report build/lldb-backtrace.txt \
+  -- \
+  ./build/parser_tests
+```
+
+RunSift 只记录 core 元数据，不复制可能非常大的 core 文件，也不会主动执行调试器。
+传入的 GDB/LLDB 文本报告会经过脱敏后复制到诊断包中。
+
 ## 诊断包
 
 每次运行会在输出目录创建一个独立目录：
@@ -146,8 +196,15 @@ touch build/logs/application.log
     ├── summary.md
     ├── events.jsonl
     ├── patterns.json
+    ├── tests.json
+    ├── diagnostics.json
+    ├── crash.json
     ├── stdout.log
     ├── stderr.log
+    ├── debugger/
+    │   └── 000-lldb-backtrace.txt
+    ├── tests/
+    │   └── 000-ctest-results.xml
     └── logs/
         ├── 000-application.log
         └── 001-error.log
@@ -158,11 +215,13 @@ touch build/logs/application.log
 记录本次运行的确定性元数据：
 
 - 命令和参数；
+- `run_id`，以及可选的 `batch_id`、`test_id`；
 - 开始、结束时间；
 - 退出码；
 - 工作目录；
 - Git commit、分支和工作区状态；
 - 日志采集前后的文件大小；
+- 结构化测试、Sanitizer、core 和调试器计数；
 - 生成的证据文件。
 
 ### `events.jsonl`
@@ -172,10 +231,16 @@ touch build/logs/application.log
 ```json
 {
   "event_id": "evt_3adf68923eead391",
+  "context": {
+    "run_id": "run_ci_4821",
+    "batch_id": "ci_4821",
+    "test_id": "parser_suite"
+  },
   "timestamp": "2026-07-30T02:00:01Z",
   "severity": "error",
   "source": "/var/log/application.log",
   "thread_id": "17",
+  "logger": "parser",
   "message": "invalid record length 18 at offset 8192",
   "evidence": {
     "artifact": "logs/000-application.log",
@@ -216,6 +281,13 @@ invalid record length <num> at offset <num>
 - 代表性证据 ID；
 - 证据追溯说明。
 
+### C++ 专用证据
+
+- `tests.json` 保存 CTest/GoogleTest 用例、状态、耗时、失败信息、稳定的 `test_id`，
+  并指向复制到 `tests/` 下的脱敏源 XML；
+- `diagnostics.json` 保存结构化 ASan、UBSan、TSan 问题、调用栈和字节级证据位置；
+- `crash.json` 保存轻量 core dump 元数据和解析后的 GDB/LLDB 报告。
+
 ## spdlog 格式
 
 RunSift 当前使用启发式解析，支持常见的 spdlog 风格：
@@ -234,7 +306,20 @@ RunSift 当前使用启发式解析，支持常见的 spdlog 风格：
 带显式时区的时间会统一转换为 UTC。没有时区的时间仍保留在原始消息中，但当前不会
 猜测它属于哪个时区。
 
-未来会增加显式解析配置和不同项目的日志格式 profile。
+项目自定义格式可以通过 JSON profile 配置：
+
+```bash
+runsift run \
+  --log build/logs/application.log \
+  --log-profile examples/spdlog-profile.json \
+  -- \
+  ./build/parser_tests
+```
+
+正则表达式必须定义具名的 `level` 和 `message` 捕获组，还可以定义 `timestamp`、
+`thread` 和 `logger`。`timestamp_format` 使用 chrono 时间格式；当日志时间本身不含
+时区时，profile 必须提供 `timezone`。参考
+[`examples/spdlog-profile.json`](examples/spdlog-profile.json)。
 
 ## 安全与隐私
 
@@ -285,17 +370,18 @@ spdlog。
 
 - 只采集命令运行期间追加到文件的字节；
 - 文件变小会被视为截断或轮转，并从当前文件开头读取；
-- 暂不自动发现被重命名的轮转文件；
-- 暂无 CTest/JUnit 专用结构化解析器；
-- 暂无项目自定义日志格式配置；
-- 暂不解析 core dump、ASan、UBSan 或 TSan 专用字段；
+- rename 方式的轮转恢复在类 Unix 系统依赖文件身份，只扫描被监控日志所在的直接目录；
+- copy-truncate 轮转可以被发现，但结束采集前已经写入又被删除的字节无法找回；
+- CTest 当前读取 JUnit XML，不读取旧式 `Testing/*/Test.xml`；
+- RunSift 不主动执行 GDB/LLDB，只导入预先生成的文本报告；
+- core 文件只记录元数据，不复制到诊断包；
 - 不复制完整源码或 Git diff；
 - 不调用 AI，不生成根因结论，也不修改代码；
 - 当前采集和聚合主要在内存完成，不适合无边界的超大日志输入。
 
 ## 路线图
 
-### 阶段一：本地证据包（当前）
+### 阶段一：本地证据包
 
 - [x] 包装任意命令
 - [x] 捕获 stdout、stderr 和退出码
@@ -307,14 +393,14 @@ spdlog。
 - [x] Git 元数据
 - [x] JSONL/JSON/Markdown 诊断包
 
-### 阶段二：C++ 工程增强
+### 阶段二：C++ 工程增强（当前）
 
-- [ ] CTest 和 GoogleTest 结构化结果
-- [ ] 可配置 spdlog profile
-- [ ] ASan、UBSan、TSan 输出解析
-- [ ] GDB/LLDB 与 core dump 元数据
-- [ ] `run_id`、`test_id`、`batch_id` 等上下文关联
-- [ ] 更可靠的日志轮转跟踪
+- [x] CTest 和 GoogleTest 结构化结果
+- [x] 可配置 spdlog profile
+- [x] ASan、UBSan、TSan 输出解析
+- [x] GDB/LLDB 与 core dump 元数据
+- [x] `run_id`、`test_id`、`batch_id` 等上下文关联
+- [x] 更可靠的日志轮转跟踪
 
 ### 阶段三：AI 中转层
 
@@ -357,6 +443,26 @@ mkdir -p /tmp/runsift-demo
 ```
 
 示例命令会返回非零退出码，这是为了验证 RunSift 不会掩盖测试失败。
+
+第二阶段还提供了包含 GoogleTest XML、自定义 spdlog profile 和模拟 ASan 报告的
+C++ 上下文示例：
+
+```bash
+mkdir -p /tmp/runsift-phase2
+touch /tmp/runsift-phase2/application.log
+
+./target/release/runsift run \
+  --log /tmp/runsift-phase2/application.log \
+  --log-profile examples/spdlog-profile.json \
+  --test-report /tmp/runsift-phase2/gtest.xml \
+  --output /tmp/runsift-phase2/runs \
+  --batch-id demo-batch \
+  --test-id parser-suite \
+  -- \
+  sh examples/demo_phase2_failure.sh \
+    /tmp/runsift-phase2/application.log \
+    /tmp/runsift-phase2/gtest.xml
+```
 
 ## 参与贡献
 

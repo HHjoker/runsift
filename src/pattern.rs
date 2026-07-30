@@ -82,7 +82,7 @@ mod tests {
     use chrono::Utc;
 
     use super::{aggregate, normalize};
-    use crate::model::{Event, EvidenceRef, Severity};
+    use crate::model::{CorrelationContext, Event, EvidenceRef, Severity};
 
     #[test]
     fn normalizes_dynamic_values() {
@@ -96,11 +96,16 @@ mod tests {
     fn stacktrace_does_not_split_the_error_pattern() {
         let event = |id: &str, message: &str| Event {
             event_id: id.to_owned(),
+            context: CorrelationContext {
+                run_id: "run_test".to_owned(),
+                ..Default::default()
+            },
             observed_at: Utc::now(),
             timestamp: None,
             severity: Severity::Error,
             source: "app.log".to_owned(),
             thread_id: None,
+            logger: None,
             message: message.to_owned(),
             evidence: EvidenceRef {
                 artifact: "app.log".to_owned(),

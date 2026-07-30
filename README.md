@@ -16,7 +16,7 @@ verifiable evidence of what happened during a failed run.
 
 > [!IMPORTANT]
 > RunSift is at an early stage. Evidence schemas and command-line options may
-> change before `1.0`.
+> change before `1.0`. RunSift `0.2` writes evidence schema version `2`.
 
 ## Why RunSift?
 
@@ -57,7 +57,7 @@ local evidence bundle
 └── other analysis tools
 ```
 
-## Implemented in phase one
+## Implemented
 
 | Capability | Current behavior |
 |---|---|
@@ -75,6 +75,17 @@ local evidence bundle
 
 These features are useful without an AI model. RunSift can be used purely as a
 failed-run organizer and log compactor.
+
+Phase two adds C++-specific engineering context:
+
+| Capability | Current behavior |
+|---|---|
+| CTest and GoogleTest | Imports JUnit XML into stable test-case records |
+| spdlog profiles | Parses project formats through a named-capture JSON profile |
+| Sanitizers | Extracts ASan, UBSan, and TSan findings and stack frames |
+| Crash context | Records core metadata and imports GDB/LLDB text reports |
+| Correlation | Propagates `run_id`, `batch_id`, and `test_id` into evidence |
+| Log rotation | Uses file identity on Unix-like systems to recover both sides of rename-based rotation |
 
 ## Quick start
 
@@ -144,6 +155,46 @@ Git context:
   ctest --test-dir build --output-on-failure
 ```
 
+### Capture structured C++ test and runtime evidence
+
+CTest can generate a JUnit XML report while RunSift captures the same run:
+
+```bash
+./target/release/runsift run \
+  --test-report build/ctest-results.xml \
+  --batch-id ci-4821 \
+  -- \
+  ctest --test-dir build \
+    --output-on-failure \
+    --output-junit build/ctest-results.xml
+```
+
+GoogleTest works with its XML output:
+
+```bash
+./target/release/runsift run \
+  --test-report build/gtest-results.xml \
+  --test-id parser-suite \
+  -- \
+  ./build/parser_tests --gtest_output=xml:build/gtest-results.xml
+```
+
+ASan, UBSan, and TSan findings written to stderr are detected automatically.
+Existing core dumps and debugger reports can be attached with `--core` and
+`--debugger-report`:
+
+```bash
+runsift run \
+  --core build/core.1234 \
+  --debugger-report build/lldb-backtrace.txt \
+  -- \
+  ./build/parser_tests
+```
+
+RunSift records core metadata but does not copy a potentially large core file
+or execute a debugger. The supplied GDB/LLDB text report is redacted and copied
+into the bundle.
+
 ## Evidence bundle
 
 Each run creates an isolated directory:
@@ -155,8 +206,15 @@ Each run creates an isolated directory:
     ├── summary.md
     ├── events.jsonl
     ├── patterns.json
+    ├── tests.json
+    ├── diagnostics.json
+    ├── crash.json
     ├── stdout.log
     ├── stderr.log
+    ├── debugger/
+    │   └── 000-lldb-backtrace.txt
+    ├── tests/
+    │   └── 000-ctest-results.xml
     └── logs/
         ├── 000-application.log
         └── 001-error.log
@@ -167,11 +225,13 @@ Each run creates an isolated directory:
 Contains deterministic run metadata:
 
 - command and arguments;
+- `run_id`, optional `batch_id`, and optional `test_id`;
 - start and finish times;
 - exit code;
 - working directory;
 - Git commit, branch, and working-tree state;
 - log sizes before and after collection;
+- structured test, sanitizer, core, and debugger counts;
 - generated artifact names.
 
 ### `events.jsonl`
@@ -181,10 +241,16 @@ Contains one structured event per line:
 ```json
 {
   "event_id": "evt_3adf68923eead391",
+  "context": {
+    "run_id": "run_ci_4821",
+    "batch_id": "ci_4821",
+    "test_id": "parser_suite"
+  },
   "timestamp": "2026-07-30T02:00:01Z",
   "severity": "error",
   "source": "/var/log/application.log",
   "thread_id": "17",
+  "logger": "parser",
   "message": "invalid record length 18 at offset 8192",
   "evidence": {
     "artifact": "logs/000-application.log",
@@ -227,6 +293,16 @@ Provides a directly readable report containing:
 - representative evidence IDs;
 - evidence-tracing guidance.
 
+### C++ evidence files
+
+- `tests.json` contains CTest/GoogleTest cases, status, duration, failure
+  details, stable `test_id` values, and a reference to the redacted source XML
+  copied under `tests/`.
+- `diagnostics.json` contains structured ASan, UBSan, and TSan findings with
+  stack frames and byte-addressable evidence.
+- `crash.json` contains lightweight core-dump metadata and parsed GDB/LLDB
+  reports.
+
 ## spdlog compatibility
 
 RunSift currently uses heuristic parsing for common spdlog-style records:
@@ -246,8 +322,20 @@ Timestamps with an explicit timezone are normalized to UTC. Timestamps without
 a timezone remain in the original message; RunSift does not guess their
 timezone.
 
-Explicit parsing configuration and project-specific format profiles are
-planned.
+For a project-specific format, provide a JSON profile:
+
+```bash
+runsift run \
+  --log build/logs/application.log \
+  --log-profile examples/spdlog-profile.json \
+  -- \
+  ./build/parser_tests
+```
+
+The regular expression must define named `level` and `message` captures. It may
+also define `timestamp`, `thread`, and `logger`. `timestamp_format` uses chrono
+format syntax; a timezone is required when the timestamp itself has no offset.
+See [`examples/spdlog-profile.json`](examples/spdlog-profile.json).
 
 ## Security and privacy
 
@@ -304,10 +392,15 @@ require replacing spdlog or modifying C++ business logic.
 - Only bytes appended while the wrapped command runs are collected.
 - A shrinking file is treated as truncation or rotation and read from byte
   zero.
-- Renamed rotation files are not discovered automatically.
-- CTest and JUnit do not yet have dedicated structured parsers.
-- Project-specific log parsing is not yet configurable.
-- Core dumps and ASan, UBSan, or TSan output do not yet have dedicated fields.
+- Rename-based rotation recovery uses file identity on Unix-like systems and
+  scans only the watched file's immediate directory.
+- Copy-truncate rotation can be detected, but bytes written and removed before
+  final collection cannot be recovered.
+- CTest support currently consumes its JUnit XML output, not legacy
+  `Testing/*/Test.xml`.
+- GDB/LLDB must be run separately; RunSift imports their text reports and does
+  not execute debugger commands.
+- Core files are described but intentionally not copied into the bundle.
 - Full source code and Git diffs are not copied into the bundle.
 - RunSift does not call AI, produce root-cause claims, or modify code.
 - Collection and aggregation are primarily in-memory and are not intended for
@@ -315,7 +408,7 @@ require replacing spdlog or modifying C++ business logic.
 
 ## Roadmap
 
-### Phase one: local evidence bundles — current
+### Phase one: local evidence bundles
 
 - [x] Wrap arbitrary commands
 - [x] Capture stdout, stderr, and exit status
@@ -327,14 +420,14 @@ require replacing spdlog or modifying C++ business logic.
 - [x] Record Git metadata
 - [x] Generate JSONL, JSON, and Markdown bundles
 
-### Phase two: C++ engineering context
+### Phase two: C++ engineering context — current
 
-- [ ] Structured CTest and GoogleTest results
-- [ ] Configurable spdlog profiles
-- [ ] ASan, UBSan, and TSan parsers
-- [ ] GDB/LLDB and core-dump metadata
-- [ ] Context correlation using `run_id`, `test_id`, and `batch_id`
-- [ ] More reliable log-rotation tracking
+- [x] Structured CTest and GoogleTest results
+- [x] Configurable spdlog profiles
+- [x] ASan, UBSan, and TSan parsers
+- [x] GDB/LLDB and core-dump metadata
+- [x] Context correlation using `run_id`, `test_id`, and `batch_id`
+- [x] More reliable log-rotation tracking
 
 ### Phase three: AI context gateway
 
@@ -378,6 +471,26 @@ mkdir -p /tmp/runsift-demo
 
 The example deliberately returns a non-zero exit code to verify that RunSift
 does not mask a failed test.
+
+Phase two has a C++-context demo with GoogleTest XML, a custom spdlog profile,
+and a simulated ASan report:
+
+```bash
+mkdir -p /tmp/runsift-phase2
+touch /tmp/runsift-phase2/application.log
+
+./target/release/runsift run \
+  --log /tmp/runsift-phase2/application.log \
+  --log-profile examples/spdlog-profile.json \
+  --test-report /tmp/runsift-phase2/gtest.xml \
+  --output /tmp/runsift-phase2/runs \
+  --batch-id demo-batch \
+  --test-id parser-suite \
+  -- \
+  sh examples/demo_phase2_failure.sh \
+    /tmp/runsift-phase2/application.log \
+    /tmp/runsift-phase2/gtest.xml
+```
 
 ## Contributing
 
