@@ -134,7 +134,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
                 events.extend(delta.events);
                 sources.push(delta.summary);
             }
-            Err(error) => eprintln!("loglens: warning: {error:#}"),
+            Err(error) => eprintln!("runsift: warning: {error:#}"),
         }
     }
 
@@ -168,7 +168,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
     };
     report::write_bundle(&bundle_dir, &manifest, &events, &patterns)?;
 
-    eprintln!("loglens: evidence bundle: {}", bundle_dir.display());
+    eprintln!("runsift: evidence bundle: {}", bundle_dir.display());
     Ok(status.code().unwrap_or(1))
 }
 

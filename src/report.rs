@@ -53,7 +53,7 @@ fn markdown(manifest: &Manifest, patterns: &[Pattern]) -> String {
         .join(" ");
 
     let mut output = format!(
-        "# LogLens 运行摘要\n\n\
+        "# RunSift 运行摘要\n\n\
          - 运行结果：{status}\n\
          - 退出码：{exit}\n\
          - 命令：`{command}`\n\

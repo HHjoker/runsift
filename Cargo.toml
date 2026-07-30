@@ -1,5 +1,5 @@
 [package]
-name = "loglens"
+name = "runsift"
 version = "0.1.0"
 edition = "2024"
 description = "Turn failed local runs into compact, traceable evidence bundles"

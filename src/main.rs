@@ -18,7 +18,7 @@ fn main() {
     match try_main() {
         Ok(code) => process::exit(code),
         Err(error) => {
-            eprintln!("loglens: {error:#}");
+            eprintln!("runsift: {error:#}");
             process::exit(2);
         }
     }

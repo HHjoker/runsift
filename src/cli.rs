@@ -23,7 +23,7 @@ pub struct RunArgs {
     pub logs: Vec<PathBuf>,
 
     /// Parent directory for generated run bundles.
-    #[arg(short, long, default_value = ".loglens/runs")]
+    #[arg(short, long, default_value = ".runsift/runs")]
     pub output: PathBuf,
 
     /// Keep obvious secrets in the generated bundle.

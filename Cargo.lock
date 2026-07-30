@@ -314,19 +314,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
-name = "loglens"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "regex",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,6 +392,19 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "runsift"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "rustversion"

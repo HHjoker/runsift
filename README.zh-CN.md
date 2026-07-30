@@ -1,19 +1,19 @@
-# LogLens
+# RunSift
 
 [English](README.md) | 简体中文
 
 > 将一次失败运行转换成适合开发者和 AI 使用的、可追溯的工程证据包。
 
-LogLens 是一个本地优先、模型无关的工程诊断上下文工具。它包装执行测试或程序命令，
+RunSift 是一个本地优先、模型无关的工程诊断上下文工具。它包装执行测试或程序命令，
 采集运行输出和指定日志，将大量非结构化信息整理成结构化事件、重复模式和可读摘要。
 
-LogLens 当前不会调用大模型，也不会修改代码。它首先解决更基础的问题：让后续的人或
+RunSift 当前不会调用大模型，也不会修改代码。它首先解决更基础的问题：让后续的人或
 AI 获得完整、精简并且可以回到原始现场的证据。
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段，证据格式和命令行参数在 `1.0` 之前可能调整。
 
-## 为什么需要 LogLens
+## 为什么需要 RunSift
 
 一次测试或程序运行失败后，开发者面对的往往是：
 
@@ -24,7 +24,7 @@ AI 获得完整、精简并且可以回到原始现场的证据。
 - AI 能阅读代码，却不知道失败运行时究竟发生了什么；
 - AI 给出的结论无法追溯到具体日志证据。
 
-LogLens 不直接替代 CTest、spdlog、日志平台或 AI。它位于这些工具之间：
+RunSift 不直接替代 CTest、spdlog、日志平台或 AI。它位于这些工具之间：
 
 ```text
 CTest / 可执行程序
@@ -34,7 +34,7 @@ CTest / 可执行程序
 └── 退出状态
           │
           ▼
-       LogLens
+       RunSift
 ├── 增量采集
 ├── 事件解析
 ├── 多行日志合并
@@ -65,7 +65,7 @@ CTest / 可执行程序
 | 默认脱敏 | 处理 Bearer Token、JWT、API Key、密码和 Secret |
 | Git 现场 | 记录仓库、commit、分支和修改文件 |
 | 双重输出 | 同时生成机器可读 JSON/JSONL 和人工可读 Markdown |
-| CI 兼容 | LogLens 返回被包装命令的退出码，不会掩盖失败 |
+| CI 兼容 | RunSift 返回被包装命令的退出码，不会掩盖失败 |
 
 这些能力不依赖 AI，即使只用于压缩日志和整理失败现场也可以独立工作。
 
@@ -80,15 +80,15 @@ CTest / 可执行程序
 ### 构建
 
 ```bash
-git clone <your-loglens-repository>
-cd loglens
+git clone <your-runsift-repository>
+cd runsift
 cargo build --release
 ```
 
 生成的二进制位于：
 
 ```text
-target/release/loglens
+target/release/runsift
 ```
 
 ### 捕获一次 CTest 运行
@@ -98,36 +98,36 @@ target/release/loglens
 ```bash
 touch build/logs/application.log
 
-./target/release/loglens run \
+./target/release/runsift run \
   --log build/logs/application.log \
-  --output .loglens/runs \
+  --output .runsift/runs \
   -- \
   ctest --test-dir build --output-on-failure
 ```
 
 `--` 后面的所有内容都是需要执行的原始命令。
 
-如果 CTest 返回 `8`，LogLens 完成诊断包后也会返回 `8`，因此可以直接用于 CI。
+如果 CTest 返回 `8`，RunSift 完成诊断包后也会返回 `8`，因此可以直接用于 CI。
 
 ### 捕获普通程序
 
 ```bash
-./target/release/loglens run \
+./target/release/runsift run \
   --log ./logs/service.log \
   -- \
   ./build/bin/service --config ./config/test.yaml
 ```
 
-即使不提供 `--log`，LogLens 仍会采集 stdout、stderr、退出状态和 Git 信息：
+即使不提供 `--log`，RunSift 仍会采集 stdout、stderr、退出状态和 Git 信息：
 
 ```bash
-./target/release/loglens run -- ./build/bin/unit_tests
+./target/release/runsift run -- ./build/bin/unit_tests
 ```
 
 ### 捕获多个日志文件
 
 ```bash
-./target/release/loglens run \
+./target/release/runsift run \
   --log ./logs/parser.log \
   --log ./logs/statistics.log \
   --log ./logs/error.log \
@@ -140,7 +140,7 @@ touch build/logs/application.log
 每次运行会在输出目录创建一个独立目录：
 
 ```text
-.loglens/runs/
+.runsift/runs/
 └── run_<UTC时间>_<进程ID>/
     ├── manifest.json
     ├── summary.md
@@ -218,7 +218,7 @@ invalid record length <num> at offset <num>
 
 ## spdlog 格式
 
-LogLens 当前使用启发式解析，支持常见的 spdlog 风格：
+RunSift 当前使用启发式解析，支持常见的 spdlog 风格：
 
 ```text
 [2026-07-30T10:00:00+08:00] [error] [thread 17] parse failed
@@ -250,7 +250,7 @@ LogLens 当前使用启发式解析，支持常见的 spdlog 风格：
 在完全可信的本地环境中，可以关闭脱敏：
 
 ```bash
-loglens run --no-redact -- ./build/bin/unit_tests
+runsift run --no-redact -- ./build/bin/unit_tests
 ```
 
 关闭前请确认诊断包不会上传或分享给不可信的系统。
@@ -347,16 +347,16 @@ cargo build --release
 仓库包含一个模拟失败运行：
 
 ```bash
-mkdir -p /tmp/loglens-demo
+mkdir -p /tmp/runsift-demo
 
-./target/release/loglens run \
-  --log /tmp/loglens-demo/application.log \
-  --output /tmp/loglens-demo/runs \
+./target/release/runsift run \
+  --log /tmp/runsift-demo/application.log \
+  --output /tmp/runsift-demo/runs \
   -- \
-  sh examples/demo_failure.sh /tmp/loglens-demo/application.log
+  sh examples/demo_failure.sh /tmp/runsift-demo/application.log
 ```
 
-示例命令会返回非零退出码，这是为了验证 LogLens 不会掩盖测试失败。
+示例命令会返回非零退出码，这是为了验证 RunSift 不会掩盖测试失败。
 
 ## 参与贡献
 
@@ -379,4 +379,4 @@ mkdir -p /tmp/loglens-demo
 
 ## License
 
-LogLens 使用 [Apache License 2.0](LICENSE)。
+RunSift 使用 [Apache License 2.0](LICENSE)。

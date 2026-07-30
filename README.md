@@ -1,24 +1,24 @@
-# LogLens
+# RunSift
 
 English | [简体中文](README.zh-CN.md)
 
 > Turn a failed run into a compact, traceable engineering evidence bundle for
 > developers and AI.
 
-LogLens is a local-first, model-agnostic diagnostic context tool. It wraps a
+RunSift is a local-first, model-agnostic diagnostic context tool. It wraps a
 test or program command, captures its output and selected logs, then turns
 large amounts of unstructured text into structured events, recurring patterns,
 and a readable summary.
 
-LogLens does not call an AI model or modify code. It first solves the more
+RunSift does not call an AI model or modify code. It first solves the more
 fundamental problem: giving humans and downstream AI complete, concise, and
 verifiable evidence of what happened during a failed run.
 
 > [!IMPORTANT]
-> LogLens is at an early stage. Evidence schemas and command-line options may
+> RunSift is at an early stage. Evidence schemas and command-line options may
 > change before `1.0`.
 
-## Why LogLens?
+## Why RunSift?
 
 After a test or program fails, developers often face:
 
@@ -29,7 +29,7 @@ After a test or program fails, developers often face:
 - AI that can read the code but cannot see what happened at runtime;
 - conclusions that cannot be traced back to exact source evidence.
 
-LogLens does not replace CTest, spdlog, an observability platform, or an AI
+RunSift does not replace CTest, spdlog, an observability platform, or an AI
 assistant. It connects them:
 
 ```text
@@ -40,7 +40,7 @@ CTest / executable
 └── exit status
           │
           ▼
-       LogLens
+       RunSift
 ├── incremental collection
 ├── event parsing
 ├── multiline reconstruction
@@ -73,7 +73,7 @@ local evidence bundle
 | Dual output | Generates JSON/JSONL for tools and Markdown for humans |
 | CI compatibility | Returns the wrapped command's exit code |
 
-These features are useful without an AI model. LogLens can be used purely as a
+These features are useful without an AI model. RunSift can be used purely as a
 failed-run organizer and log compactor.
 
 ## Quick start
@@ -82,20 +82,20 @@ failed-run organizer and log compactor.
 
 - Rust 1.85 or newer (Edition 2024)
 - Linux, macOS, or another platform supported by the current dependencies
-- Git is optional; LogLens also works outside a Git repository
+- Git is optional; RunSift also works outside a Git repository
 
 ### Build
 
 ```bash
-git clone <your-loglens-repository>
-cd loglens
+git clone <your-runsift-repository>
+cd runsift
 cargo build --release
 ```
 
 The executable is generated at:
 
 ```text
-target/release/loglens
+target/release/runsift
 ```
 
 ### Capture a CTest run
@@ -106,37 +106,37 @@ Assume the C++ application writes spdlog output to
 ```bash
 touch build/logs/application.log
 
-./target/release/loglens run \
+./target/release/runsift run \
   --log build/logs/application.log \
-  --output .loglens/runs \
+  --output .runsift/runs \
   -- \
   ctest --test-dir build --output-on-failure
 ```
 
 Everything after `--` is the original command. If CTest returns exit code `8`,
-LogLens writes the evidence bundle and also returns `8`, making it safe to use
+RunSift writes the evidence bundle and also returns `8`, making it safe to use
 inside CI without hiding failures.
 
 ### Capture a regular executable
 
 ```bash
-./target/release/loglens run \
+./target/release/runsift run \
   --log ./logs/service.log \
   -- \
   ./build/bin/service --config ./config/test.yaml
 ```
 
-Without `--log`, LogLens still captures stdout, stderr, the exit status, and
+Without `--log`, RunSift still captures stdout, stderr, the exit status, and
 Git context:
 
 ```bash
-./target/release/loglens run -- ./build/bin/unit_tests
+./target/release/runsift run -- ./build/bin/unit_tests
 ```
 
 ### Capture multiple log files
 
 ```bash
-./target/release/loglens run \
+./target/release/runsift run \
   --log ./logs/parser.log \
   --log ./logs/statistics.log \
   --log ./logs/error.log \
@@ -149,7 +149,7 @@ Git context:
 Each run creates an isolated directory:
 
 ```text
-.loglens/runs/
+.runsift/runs/
 └── run_<UTC-time>_<process-id>/
     ├── manifest.json
     ├── summary.md
@@ -229,7 +229,7 @@ Provides a directly readable report containing:
 
 ## spdlog compatibility
 
-LogLens currently uses heuristic parsing for common spdlog-style records:
+RunSift currently uses heuristic parsing for common spdlog-style records:
 
 ```text
 [2026-07-30T10:00:00+08:00] [error] [thread 17] parse failed
@@ -243,7 +243,7 @@ timestamp | level | thread ID | module or logger | message
 ```
 
 Timestamps with an explicit timezone are normalized to UTC. Timestamps without
-a timezone remain in the original message; LogLens does not guess their
+a timezone remain in the original message; RunSift does not guess their
 timezone.
 
 Explicit parsing configuration and project-specific format profiles are
@@ -263,7 +263,7 @@ Generated bundles apply basic redaction by default for:
 Redaction can be disabled for a trusted, local-only workflow:
 
 ```bash
-loglens run --no-redact -- ./build/bin/unit_tests
+runsift run --no-redact -- ./build/bin/unit_tests
 ```
 
 Review the bundle before uploading or sharing it. Pattern-based redaction
@@ -309,7 +309,7 @@ require replacing spdlog or modifying C++ business logic.
 - Project-specific log parsing is not yet configurable.
 - Core dumps and ASan, UBSan, or TSan output do not yet have dedicated fields.
 - Full source code and Git diffs are not copied into the bundle.
-- LogLens does not call AI, produce root-cause claims, or modify code.
+- RunSift does not call AI, produce root-cause claims, or modify code.
 - Collection and aggregation are primarily in-memory and are not intended for
   unbounded log streams yet.
 
@@ -367,21 +367,21 @@ cargo build --release
 The repository includes a simulated failed run:
 
 ```bash
-mkdir -p /tmp/loglens-demo
+mkdir -p /tmp/runsift-demo
 
-./target/release/loglens run \
-  --log /tmp/loglens-demo/application.log \
-  --output /tmp/loglens-demo/runs \
+./target/release/runsift run \
+  --log /tmp/runsift-demo/application.log \
+  --output /tmp/runsift-demo/runs \
   -- \
-  sh examples/demo_failure.sh /tmp/loglens-demo/application.log
+  sh examples/demo_failure.sh /tmp/runsift-demo/application.log
 ```
 
-The example deliberately returns a non-zero exit code to verify that LogLens
+The example deliberately returns a non-zero exit code to verify that RunSift
 does not mask a failed test.
 
 ## Contributing
 
-LogLens is at an early stage. The following contributions are particularly
+RunSift is at an early stage. The following contributions are particularly
 valuable:
 
 - anonymized failure logs from real projects;
@@ -401,4 +401,4 @@ Before submitting logs, remove private data. When opening an issue, include:
 
 ## License
 
-LogLens is licensed under the [Apache License 2.0](LICENSE).
+RunSift is licensed under the [Apache License 2.0](LICENSE).
