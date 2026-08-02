@@ -12,8 +12,8 @@ use runsift::ai::{
     build_context, validate_analysis,
 };
 use runsift::model::{
-    CommandResult, CorrelationContext, CrashEvidence, Event, EvidenceRef, Manifest, Pattern,
-    Severity,
+    CaptureMode, CommandResult, CorrelationContext, CrashEvidence, Event, EvidenceRef, Manifest,
+    Pattern, Severity,
 };
 use serde_json::{Value, json};
 
@@ -27,11 +27,16 @@ fn write_json(path: &Path, value: &impl serde::Serialize) {
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
 }
 
+fn read_json_value(path: &Path) -> Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
 fn create_bundle(label: &str) -> PathBuf {
     let directory = support::temp_directory(label);
     fs::create_dir_all(&directory).unwrap();
     let correlation = CorrelationContext {
         run_id: "run_demo".to_owned(),
+        case_id: None,
         batch_id: Some("batch_42".to_owned()),
         test_id: Some("parser_suite".to_owned()),
     };
@@ -63,12 +68,14 @@ fn create_bundle(label: &str) -> PathBuf {
     };
     let manifest = Manifest {
         schema_version: 2,
+        capture_mode: CaptureMode::Live,
         run_id: correlation.run_id.clone(),
+        case_id: None,
         context: correlation,
         started_at: timestamp(),
         finished_at: timestamp(),
         working_directory: "/work/project".into(),
-        command: CommandResult {
+        command: Some(CommandResult {
             program: "./build/parser_tests".to_owned(),
             args: vec![
                 "--gtest_filter=Parser.*".to_owned(),
@@ -76,7 +83,9 @@ fn create_bundle(label: &str) -> PathBuf {
             ],
             exit_code: Some(1),
             success: false,
-        },
+        }),
+        observed_started_at: None,
+        observed_finished_at: None,
         redacted: true,
         git: None,
         sources: Vec::new(),
@@ -158,6 +167,24 @@ fn builds_budgeted_context_with_facts_and_explicit_gaps() {
             .unwrap()
             .contains("supersecret")
     );
+
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[test]
+fn loads_legacy_schema_two_manifest_without_new_capture_fields() {
+    let directory = create_bundle("legacy-schema-two");
+    let mut manifest = read_json_value(&directory.join("manifest.json"));
+    let object = manifest.as_object_mut().unwrap();
+    object.remove("capture_mode");
+    object.remove("case_id");
+    object.remove("observed_started_at");
+    object.remove("observed_finished_at");
+    write_json(&directory.join("manifest.json"), &manifest);
+
+    let bundle = EvidenceBundle::load(&directory).unwrap();
+    assert_eq!(bundle.manifest.capture_mode, CaptureMode::Live);
+    assert!(bundle.manifest.command.is_some());
 
     let _ = fs::remove_dir_all(directory);
 }

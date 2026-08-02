@@ -1,0 +1,7 @@
+[2026-08-02T10:00:00+08:00] [info] [thread 17] parser started batch=4821
+[2026-08-02T10:00:01+08:00] [warn] [thread 17] input sequence gap expected=1042 actual=1044
+[2026-08-02T10:00:02+08:00] [error] [thread 17] invalid record length 18 at offset 8192
+==42==ERROR: AddressSanitizer: heap-use-after-free on address 0x1234
+    #0 0x1000 in parse_record /work/parser.cpp:42
+    #1 0x2000 in main /work/main.cpp:10
+SUMMARY: AddressSanitizer: heap-use-after-free

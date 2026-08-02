@@ -28,6 +28,12 @@ static SEVERITY: LazyLock<Regex> = LazyLock::new(|| {
 });
 static THREAD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\[(?:thread|tid)?[ =:]*(?P<value>[0-9a-fx]+)\]").unwrap());
+static KEY_SIGNAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(error|failed?|failure|fatal|panic|exception|timeout|corrupt(?:ed|ion)?|invalid|mismatch|dropped|missing|lost|abort(?:ed)?|segmentation fault|sigsegv)\b",
+    )
+    .unwrap()
+});
 
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +64,14 @@ pub struct Delta {
 #[derive(Debug)]
 pub struct CollectedSource {
     pub deltas: Vec<Delta>,
+    pub summary: SourceSummary,
+}
+
+#[derive(Debug)]
+pub struct ImportedLog {
+    pub content: Vec<u8>,
+    pub raw_content: String,
+    pub events: Vec<Event>,
     pub summary: SourceSummary,
 }
 
@@ -155,7 +169,76 @@ pub fn collect(
             reset_detected,
             rotation_detected,
             rotation_recovered,
+            sha256: None,
+            modified_at: current_metadata
+                .and_then(|metadata| metadata.modified().ok())
+                .map(DateTime::<Utc>::from),
             segments,
+        },
+    })
+}
+
+pub fn import_file(
+    path: &Path,
+    artifact: String,
+    imported_at: DateTime<Utc>,
+    redact_enabled: bool,
+    profile: Option<&LogProfile>,
+    context: &CorrelationContext,
+) -> Result<ImportedLog> {
+    let before = path
+        .metadata()
+        .with_context(|| format!("failed to inspect historical log {}", path.display()))?;
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read historical log {}", path.display()))?;
+    let after = path
+        .metadata()
+        .with_context(|| format!("failed to inspect historical log {}", path.display()))?;
+    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        bail!(
+            "historical log {} changed during import; retry after the file is stable",
+            path.display()
+        );
+    }
+    let raw_content = String::from_utf8_lossy(&bytes).into_owned();
+    let options = ParseOptions {
+        observed_at: imported_at,
+        redact_enabled,
+        profile,
+        context,
+    };
+    let events = parse_event_bytes(path, &artifact, 0, &bytes, &options);
+    let sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let size = bytes.len() as u64;
+    let content = if redact_enabled {
+        redact::text(&raw_content, true).into_bytes()
+    } else {
+        bytes
+    };
+
+    Ok(ImportedLog {
+        content,
+        raw_content,
+        events,
+        summary: SourceSummary {
+            path: path.to_path_buf(),
+            initial_size: size,
+            final_size: size,
+            collected_bytes: size,
+            reset_detected: false,
+            rotation_detected: false,
+            rotation_recovered: false,
+            sha256: Some(sha256),
+            modified_at: after.modified().ok().map(DateTime::<Utc>::from),
+            segments: vec![SourceSegment {
+                path: path.to_path_buf(),
+                artifact,
+                byte_start: 0,
+                byte_end: size,
+            }],
         },
     })
 }
@@ -182,6 +265,10 @@ pub fn parse_events(
         content.as_bytes(),
         &options,
     )
+}
+
+pub fn is_key_message(message: &str) -> bool {
+    KEY_SIGNAL.is_match(message)
 }
 
 struct ParseOptions<'a> {

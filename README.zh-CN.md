@@ -2,19 +2,20 @@
 
 [English](README.md) | 简体中文
 
-> 将一次失败运行转换成适合开发者和 AI 使用的、可追溯的工程证据包。
+> 将实时失败或历史日志转换成适合开发者和 AI 使用的、可追溯工程证据。
 
-RunSift 是一个本地优先、模型无关的工程诊断上下文工具。它包装执行测试或程序命令，
-采集运行输出和指定日志，将大量非结构化信息整理成结构化事件、重复模式和可读摘要。
+RunSift 是一个本地优先、模型无关的工程诊断上下文工具。它既能包装执行测试或程序，
+也能在问题无法复现时完整导入历史日志。两种入口都会将非结构化信息整理成结构化
+事件、高信号模式、可追溯证据和开发者摘要。
 
-`run` 和 `context` 命令不会调用大模型，也不会修改代码。只有显式执行 `analyze`
-并选择适配器时才会访问模型。这样可以先独立解决更基础的问题：让后续的人或 AI
-获得完整、精简并且可以回到原始现场的证据。
+`run`、`import` 和 `context` 不会调用大模型，也不会修改源码或原始日志。只有显式
+执行 `analyze` 并选择适配器时才会访问模型。这样可以先独立解决更基础的问题：让
+后续的人或 AI 获得精简、可靠并且可以回到原始现场的证据。
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段，证据格式和命令行参数在 `1.0` 之前可能调整。
-> Rust library API 目前也不保证稳定。RunSift `0.3` 生成的证据格式版本为 `2`，
-> 诊断上下文协议版本为 `1`。
+> Rust library API 目前也不保证稳定。RunSift `0.4` 生成的证据格式版本为 `3`，
+> 诊断上下文协议版本为 `2`，并继续读取旧的 schema v2 证据包。
 
 ## 为什么需要 RunSift
 
@@ -72,6 +73,18 @@ CTest / 可执行程序
 
 这些能力不依赖 AI，即使只用于压缩日志和整理失败现场也可以独立工作。
 
+历史证据导入现在是一等入口：
+
+| 能力 | 当前行为 |
+|---|---|
+| 完整文件导入 | 不重新运行程序，读取已有日志的全部字节 |
+| 文件和目录 | 支持多个路径、目录直接文件，以及使用 `--recursive` 递归导入 |
+| 来源完整性 | 记录原始路径、大小、修改时间、SHA-256 和字节级证据位置 |
+| 关键信息抽取 | 提取 WARN 以上、Sanitizer，以及没有明确级别的失败相关关键字 |
+| 开发者摘要 | 输出来源清单、时间范围、级别统计、关键事件时间线和重复模式 |
+| Case 关联 | 使用稳定 `case_id` 组织历史证据，不伪造不存在的命令和退出状态 |
+| 原子输出 | 所有请求输入处理成功后才发布最终证据包 |
+
 第二阶段增加了面向 C++ 工程的上下文：
 
 | 能力 | 当前行为 |
@@ -114,6 +127,47 @@ cargo build --release
 
 ```text
 target/release/runsift
+```
+
+### 导入历史日志
+
+导入一份从外场取回的日志：
+
+```bash
+./target/release/runsift import \
+  --case-id field-4821 \
+  /path/to/application.log
+```
+
+原始日志只读。RunSift 在 `.runsift/cases/field-4821/` 下生成新证据包，并在终端提示
+`summary.md` 的位置。
+
+导入多个日志或整个目录树：
+
+```bash
+./target/release/runsift import \
+  --case-id customer-crash-4821 \
+  --recursive \
+  ./field-logs/ ./gateway.log
+```
+
+有相关证据时可以一并附加：
+
+```bash
+./target/release/runsift import application.log \
+  --test-report gtest-results.xml \
+  --debugger-report gdb-backtrace.txt \
+  --core core.1234
+```
+
+先查看开发者摘要，再按需生成本地 AI 上下文：
+
+```bash
+less .runsift/cases/field-4821/summary.md
+
+./target/release/runsift context \
+  .runsift/cases/field-4821 \
+  --token-budget 8000
 ```
 
 ### 捕获一次 CTest 运行
@@ -200,11 +254,13 @@ RunSift 只记录 core 元数据，不复制可能非常大的 core 文件，也
 
 ### 在本地生成 AI 上下文
 
-`run` 创建诊断包后，可以按近似 Token 预算选择其中信号最高的证据：
+`run` 或 `import` 创建证据包后，可以按近似 Token 预算选择其中信号最高的证据：
 
 ```bash
 runsift context .runsift/runs/<run_id> --token-budget 8000
 ```
+
+历史问题使用 `.runsift/cases/<case_id>`。
 
 该命令写入 `ai/context.json` 和 `ai/prompt.md`，只在本地工作，不访问模型。
 如果其他工具需要机器可读输出：
@@ -214,7 +270,7 @@ runsift context .runsift/runs/<run_id> --stdout
 ```
 
 上下文包含已观察事实、刻意保持为空的推断列表、已知证据缺口、选中的证据和精确的
-响应格式。详见[诊断上下文协议](docs/diagnostic-context-v1.md)。
+响应格式。详见[诊断上下文协议](docs/diagnostic-context-v2.md)。
 
 ### 通过显式适配器进行分析
 
@@ -241,7 +297,7 @@ runsift analyze .runsift/runs/<run_id> openai \
 
 ## 诊断包
 
-每次运行会在输出目录创建一个独立目录：
+实时运行和历史问题使用不同的父目录，但下游采用相同证据接口：
 
 ```text
 .runsift/runs/
@@ -266,18 +322,32 @@ runsift analyze .runsift/runs/<run_id> openai \
     └── logs/
         ├── 000-application.log
         └── 001-error.log
+
+.runsift/cases/
+└── case_<UTC时间>_<进程ID>/
+    ├── manifest.json
+    ├── summary.md
+    ├── events.jsonl
+    ├── patterns.json
+    ├── tests.json
+    ├── diagnostics.json
+    ├── crash.json
+    └── logs/
+        ├── 000-application.log
+        └── 001-application.log.1
 ```
 
 ### `manifest.json`
 
-记录本次运行的确定性元数据：
+记录本次采集或导入的确定性元数据：
 
-- 命令和参数；
-- `run_id`，以及可选的 `batch_id`、`test_id`；
-- 开始、结束时间；
-- 退出码；
+- `capture_mode`（`live` 或 `import`）；
+- 实时证据使用 `run_id`，历史证据使用 `case_id`；
+- 实时采集存在时记录命令、参数和退出码；
+- 处理时间范围和日志中识别到的时间范围；
 - 工作目录；
-- Git commit、分支和工作区状态；
+- 实时采集可选的 Git commit、分支和工作区状态；
+- 原始来源路径、大小、修改时间、SHA-256 和复制产物；
 - 日志采集前后的文件大小；
 - 结构化测试、Sanitizer、core 和调试器计数；
 - 生成的证据文件。
@@ -330,11 +400,12 @@ invalid record length <num> at offset <num>
 
 ### `summary.md`
 
-提供适合开发者直接阅读的运行摘要，包括：
+提供适合开发者直接阅读的摘要，包括：
 
-- 成功或失败状态；
-- 原始命令和退出码；
-- Git 现场；
+- 证据类型和来源清单；
+- 存在可靠时间戳时的历史日志时间范围；
+- 日志级别统计和高信号事件时间线；
+- 实时采集存在时的命令、退出状态和 Git 现场；
 - 高信号事件模式；
 - 代表性证据 ID；
 - 证据追溯说明。
@@ -381,6 +452,12 @@ runsift run \
 时区时，profile 必须提供 `timezone`。参考
 [`examples/spdlog-profile.json`](examples/spdlog-profile.json)。
 
+同一个 profile 也能用于历史日志：
+
+```bash
+runsift import --log-profile examples/spdlog-profile.json ./field-logs
+```
+
 ## 安全与隐私
 
 诊断包默认进行基础脱敏，目前覆盖：
@@ -403,9 +480,9 @@ runsift run --no-redact -- ./build/bin/unit_tests
 
 关闭前请确认诊断包不会上传或分享给不可信的系统。
 
-`run` 和 `context` 不上传证据。`analyze local` 只调用用户指定的进程；
-`analyze openai` 会把生成的 prompt 发送到配置的 base URL。API Key 从指定环境变量
-读取，不会写入诊断包。
+`run`、`import` 和 `context` 不上传证据。`import` 不修改来源文件，并在写入脱敏副本
+前计算原始字节 SHA-256。`analyze local` 只调用用户指定的进程；`analyze openai` 会把
+生成的 prompt 发送到配置的 base URL。API Key 从指定环境变量读取，不会写入诊断包。
 
 原始日志仍保留在原位置。事件中的字节偏移指向原始文件；如果脱敏改变了文本长度，
 该偏移不用于定位诊断包内的脱敏副本。
@@ -436,7 +513,14 @@ spdlog。
 
 ## 当前限制
 
-- 只采集命令运行期间追加到文件的字节；
+- `run` 只采集命令运行期间追加的字节；已有完整文件请使用 `import`；
+- 历史导入目前接受普通文件和目录，尚不自动展开 `.gz`、`.zip`、`.tar.gz`；
+- 来源文件在读取期间必须保持稳定；如果大小或修改时间发生变化，RunSift 会拒绝本次
+  导入；
+- 导入文本当前在内存中处理，暂不适合无边界或数 GB 级日志集合；
+- 没有显式时区时间戳时，RunSift 保留来源和字节顺序，但不声称建立了可靠的跨文件
+  时间线；
+- 轮转日志可以作为多个文件导入，但记录无时间戳时暂不根据文件名推断并重排顺序；
 - 文件变小会被视为截断或轮转，并从当前文件开头读取；
 - rename 方式的轮转恢复在类 Unix 系统依赖文件身份，只扫描被监控日志所在的直接目录；
 - copy-truncate 轮转可以被发现，但结束采集前已经写入又被删除的字节无法找回；
@@ -484,11 +568,22 @@ spdlog。
 - [x] 分析结论到证据 ID 的强制引用
 - [ ] 独立 MCP Server
 
-### 阶段四：通用生态
+### 阶段四：历史问题证据（当前）
+
+- [x] 完整历史日志文件导入
+- [x] 多文件和递归目录输入
+- [x] 来源 SHA-256、元数据、产物和字节偏移追溯
+- [x] 历史时间范围和高信号开发者摘要
+- [x] `context` 和 `analyze` 支持历史证据
+- [x] 可选测试、调试器和 core 证据
+- [ ] 压缩包输入
+- [ ] 显式问题锚点和时间窗口
+- [ ] 无时间戳轮转文件族推断
+
+### 阶段五：通用生态
 
 - [ ] JUnit、pytest、cargo test 等适配器
 - [ ] CI 集成
-- [ ] 外场日志离线导入
 - [ ] OpenTelemetry 兼容
 - [ ] 可插拔输入、解析器和输出端
 
@@ -528,6 +623,17 @@ mkdir -p /tmp/runsift-demo
 ```
 
 示例命令会返回非零退出码，这是为了验证 RunSift 不会掩盖测试失败。
+
+不运行任何程序也可以体验历史导入：
+
+```bash
+./target/release/runsift import \
+  --case-id historical-demo \
+  --output /tmp/runsift-cases \
+  examples/historical_failure.log
+
+less /tmp/runsift-cases/historical-demo/summary.md
+```
 
 第二阶段还提供了包含 GoogleTest XML、自定义 spdlog profile 和模拟 ASan 报告的
 C++ 上下文示例：

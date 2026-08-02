@@ -16,8 +16,14 @@ fn parses_asan_report_and_stack() {
     #1 0x2000 in main /work/main.cpp:10
 SUMMARY: AddressSanitizer: heap-use-after-free
 ";
-    let diagnostics =
-        diagnostics::parse(input, "stderr.log".as_ref(), "stderr.log", &context(), &[]);
+    let diagnostics = diagnostics::parse(
+        input,
+        "stderr.log".as_ref(),
+        "stderr.log",
+        &context(),
+        &[],
+        true,
+    );
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].kind, DiagnosticKind::Address);
     assert_eq!(diagnostics[0].stack_frames.len(), 2);
@@ -32,8 +38,14 @@ WARNING: ThreadSanitizer: data race
   Write of size 4 at 0x1234 by thread T1:
     #0 update /work/state.cpp:18
 ";
-    let diagnostics =
-        diagnostics::parse(input, "stderr.log".as_ref(), "stderr.log", &context(), &[]);
+    let diagnostics = diagnostics::parse(
+        input,
+        "stderr.log".as_ref(),
+        "stderr.log",
+        &context(),
+        &[],
+        true,
+    );
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(diagnostics[0].kind, DiagnosticKind::UndefinedBehavior);
     assert_eq!(diagnostics[1].kind, DiagnosticKind::Thread);

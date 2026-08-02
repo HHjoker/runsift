@@ -15,6 +15,14 @@ pub enum Severity {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureMode {
+    #[default]
+    Live,
+    Import,
+}
+
 impl Severity {
     pub fn priority(self) -> u8 {
         match self {
@@ -32,6 +40,8 @@ impl Severity {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CorrelationContext {
     pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +102,10 @@ pub struct SourceSummary {
     pub reset_detected: bool,
     pub rotation_detected: bool,
     pub rotation_recovered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<DateTime<Utc>>,
     pub segments: Vec<SourceSegment>,
 }
 
@@ -240,12 +254,21 @@ pub struct CommandResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema_version: u32,
+    #[serde(default)]
+    pub capture_mode: CaptureMode,
     pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
     pub context: CorrelationContext,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
     pub working_directory: PathBuf,
-    pub command: CommandResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_started_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_finished_at: Option<DateTime<Utc>>,
     pub redacted: bool,
     pub git: Option<GitInfo>,
     pub sources: Vec<SourceSummary>,

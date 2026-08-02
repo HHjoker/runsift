@@ -32,21 +32,22 @@ pub fn aggregate(events: &[Event]) -> Vec<Pattern> {
         let template = normalize(&event.message);
         let key = format!("{:?}:{template}", event.severity);
         let pattern_id = stable_id("pat", &key);
+        let event_time = event.timestamp.unwrap_or(event.observed_at);
         let entry = patterns.entry(key).or_insert_with(|| Accumulator {
             pattern: Pattern {
                 pattern_id,
                 severity: event.severity,
                 template,
                 count: 0,
-                first_observed_at: event.observed_at,
-                last_observed_at: event.observed_at,
+                first_observed_at: event_time,
+                last_observed_at: event_time,
                 representative_event_ids: Vec::new(),
             },
         });
 
         entry.pattern.count += 1;
-        entry.pattern.first_observed_at = entry.pattern.first_observed_at.min(event.observed_at);
-        entry.pattern.last_observed_at = entry.pattern.last_observed_at.max(event.observed_at);
+        entry.pattern.first_observed_at = entry.pattern.first_observed_at.min(event_time);
+        entry.pattern.last_observed_at = entry.pattern.last_observed_at.max(event_time);
         if entry.pattern.representative_event_ids.len() < 3 {
             entry
                 .pattern

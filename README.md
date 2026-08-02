@@ -2,25 +2,24 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> Turn a failed run into a compact, traceable engineering evidence bundle for
-> developers and AI.
+> Turn a live failure or historical log set into compact, traceable engineering
+> evidence for developers and AI.
 
-RunSift is a local-first, model-agnostic diagnostic context tool. It wraps a
-test or program command, captures its output and selected logs, then turns
-large amounts of unstructured text into structured events, recurring patterns,
-and a readable summary.
+RunSift is a local-first, model-agnostic diagnostic context tool. It can wrap a
+live test or program command, or import complete historical logs when a problem
+cannot be reproduced. Both paths turn unstructured text into structured events,
+high-signal patterns, traceable evidence, and a readable summary.
 
-The `run` and `context` commands do not call an AI model or modify code. Model
-access happens only through an explicit `analyze` command and adapter. This
-keeps the more fundamental problem separate: giving humans and downstream AI
-complete, concise, and verifiable evidence of what happened during a failed
-run.
+The `run`, `import`, and `context` commands do not call an AI model or modify
+source evidence. Model access happens only through an explicit `analyze`
+command and adapter. This keeps the fundamental problem separate: giving humans
+and downstream AI concise, verifiable evidence of what happened.
 
 > [!IMPORTANT]
 > RunSift is at an early stage. Evidence schemas and command-line options may
 > change before `1.0`. The Rust library API is also experimental. RunSift
-> `0.3` writes evidence schema version `2` and diagnostic-context protocol
-> version `1`.
+> `0.4` writes evidence schema version `3` and diagnostic-context protocol
+> version `2`. Existing schema version `2` bundles remain readable.
 
 ## Why RunSift?
 
@@ -37,15 +36,15 @@ RunSift does not replace CTest, spdlog, an observability platform, or an AI
 assistant. It connects them:
 
 ```text
-CTest / executable
-├── stdout / stderr
-├── spdlog files
-├── Git revision and working tree
-└── exit status
+live command                 historical incident
+├── stdout / stderr          ├── one or more log files
+├── spdlog files             ├── directories
+├── Git revision             ├── test/debugger reports
+└── exit status              └── core metadata
           │
           ▼
        RunSift
-├── incremental collection
+├── live capture or full-file import
 ├── event parsing
 ├── multiline reconstruction
 ├── secret redaction
@@ -79,6 +78,18 @@ local evidence bundle
 
 These features are useful without an AI model. RunSift can be used purely as a
 failed-run organizer and log compactor.
+
+Historical evidence import is a first-class entry point:
+
+| Capability | Current behavior |
+|---|---|
+| Complete-file import | Reads all bytes from existing logs without rerunning the program |
+| Files and directories | Imports multiple paths, immediate directory files, or nested files with `--recursive` |
+| Source integrity | Records original path, size, modification time, SHA-256, and byte-addressable evidence |
+| Key information | Highlights WARN+, sanitizer output, and failure-related keywords even without an explicit level |
+| Developer summary | Produces source inventory, time range, severity counts, key-event timeline, and recurring patterns |
+| Case correlation | Groups historical evidence under a stable `case_id` without inventing a command or exit status |
+| Atomic output | Publishes a bundle only after every requested input is processed successfully |
 
 Phase two adds C++-specific engineering context:
 
@@ -122,6 +133,47 @@ The executable is generated at:
 
 ```text
 target/release/runsift
+```
+
+### Import historical logs
+
+Import one log that came back from a field incident:
+
+```bash
+./target/release/runsift import \
+  --case-id field-4821 \
+  /path/to/application.log
+```
+
+The original file is read-only. RunSift writes a new bundle under
+`.runsift/cases/field-4821/` and prints the path to its `summary.md`.
+
+Import several logs or a directory tree:
+
+```bash
+./target/release/runsift import \
+  --case-id customer-crash-4821 \
+  --recursive \
+  ./field-logs/ ./gateway.log
+```
+
+Attach related evidence when available:
+
+```bash
+./target/release/runsift import application.log \
+  --test-report gtest-results.xml \
+  --debugger-report gdb-backtrace.txt \
+  --core core.1234
+```
+
+Read the developer view, then optionally build local AI context:
+
+```bash
+less .runsift/cases/field-4821/summary.md
+
+./target/release/runsift context \
+  .runsift/cases/field-4821 \
+  --token-budget 8000
 ```
 
 ### Capture a CTest run
@@ -212,12 +264,14 @@ into the bundle.
 
 ### Build AI-ready context locally
 
-After `run` creates a bundle, select its highest-signal evidence under an
-approximate token budget:
+After `run` or `import` creates a bundle, select its highest-signal evidence
+under an approximate token budget:
 
 ```bash
 runsift context .runsift/runs/<run_id> --token-budget 8000
 ```
+
+For a historical case, pass `.runsift/cases/<case_id>` instead.
 
 This writes `ai/context.json` and `ai/prompt.md`. It is local-only and does not
 contact a model. For a machine-readable tool interface:
@@ -228,7 +282,7 @@ runsift context .runsift/runs/<run_id> --stdout
 
 The context contains observed facts, an intentionally empty hypothesis list,
 known evidence gaps, selected evidence, and the exact response schema. See the
-[diagnostic context protocol](docs/diagnostic-context-v1.md).
+[diagnostic context protocol](docs/diagnostic-context-v2.md).
 
 ### Analyze through an explicit adapter
 
@@ -257,7 +311,8 @@ evidence selected into the context.
 
 ## Evidence bundle
 
-Each run creates an isolated directory:
+Live runs and historical cases use separate parent directories but share the
+same downstream evidence interface:
 
 ```text
 .runsift/runs/
@@ -282,18 +337,32 @@ Each run creates an isolated directory:
     └── logs/
         ├── 000-application.log
         └── 001-error.log
+
+.runsift/cases/
+└── case_<UTC-time>_<process-id>/
+    ├── manifest.json
+    ├── summary.md
+    ├── events.jsonl
+    ├── patterns.json
+    ├── tests.json
+    ├── diagnostics.json
+    ├── crash.json
+    └── logs/
+        ├── 000-application.log
+        └── 001-application.log.1
 ```
 
 ### `manifest.json`
 
-Contains deterministic run metadata:
+Contains deterministic capture or import metadata:
 
-- command and arguments;
-- `run_id`, optional `batch_id`, and optional `test_id`;
-- start and finish times;
-- exit code;
+- `capture_mode` (`live` or `import`);
+- `run_id` for live evidence or `case_id` for historical evidence;
+- optional command, arguments, and exit code when a live command was captured;
+- processing and observed-log time ranges;
 - working directory;
-- Git commit, branch, and working-tree state;
+- optional Git commit, branch, and working-tree state for live capture;
+- original source paths, sizes, modification times, SHA-256 values, and copied artifacts;
 - log sizes before and after collection;
 - structured test, sanitizer, core, and debugger counts;
 - generated artifact names.
@@ -350,9 +419,10 @@ representative event IDs.
 
 Provides a directly readable report containing:
 
-- success or failure status;
-- command and exit code;
-- Git context;
+- evidence type and source inventory;
+- historical log time range when reliable timestamps exist;
+- severity counts and high-signal event timeline;
+- live command, exit status, and Git context when available;
 - high-signal event patterns;
 - representative evidence IDs;
 - evidence-tracing guidance.
@@ -399,6 +469,12 @@ runsift run \
   ./build/parser_tests
 ```
 
+The same profile can parse historical files:
+
+```bash
+runsift import --log-profile examples/spdlog-profile.json ./field-logs
+```
+
 The regular expression must define named `level` and `message` captures. It may
 also define `timestamp`, `thread`, and `logger`. `timestamp_format` uses chrono
 format syntax; a timezone is required when the timestamp itself has no offset.
@@ -427,10 +503,11 @@ runsift run --no-redact -- ./build/bin/unit_tests
 Review the bundle before uploading or sharing it. Pattern-based redaction
 cannot guarantee removal of every project-specific secret.
 
-`run` and `context` never upload evidence. `analyze local` invokes only the
-provided process. `analyze openai` sends the generated prompt to the configured
-base URL; API keys are read from the named environment variable and are not
-stored in the bundle.
+`run`, `import`, and `context` never upload evidence. `import` does not modify
+its source files and hashes the original bytes before writing redacted copies.
+`analyze local` invokes only the provided process. `analyze openai` sends the
+generated prompt to the configured base URL; API keys are read from the named
+environment variable and are not stored in the bundle.
 
 Original logs remain in their original locations. Evidence byte offsets refer
 to those original files. If redaction changes text length, those offsets do not
@@ -465,7 +542,18 @@ require replacing spdlog or modifying C++ business logic.
 
 ## Current limitations
 
-- Only bytes appended while the wrapped command runs are collected.
+- `run` collects only bytes appended while its wrapped command runs; use
+  `import` to read complete existing files.
+- Historical import currently accepts regular files and directories. Compressed
+  `.gz`, `.zip`, and `.tar.gz` inputs are not yet expanded.
+- A source file must remain stable while it is read; RunSift rejects files whose
+  size or modification time changes during import.
+- Imported text is processed in memory and is not yet intended for unbounded or
+  multi-gigabyte log sets.
+- Without explicit-timezone timestamps, RunSift preserves source and byte order
+  but does not claim a reliable cross-file timeline.
+- Rotation families are accepted as multiple files but are not yet inferred or
+  reordered by filename when their records lack timestamps.
 - A shrinking file is treated as truncation or rotation and read from byte
   zero.
 - Rename-based rotation recovery uses file identity on Unix-like systems and
@@ -523,11 +611,22 @@ require replacing spdlog or modifying C++ business logic.
 - [x] Required evidence citations in analysis results
 - [ ] Dedicated MCP server
 
-### Phase four: general ecosystem
+### Phase four: historical incident evidence — current
+
+- [x] Complete historical log-file import
+- [x] Multi-file and recursive-directory input
+- [x] Source SHA-256, metadata, artifact, and byte-offset provenance
+- [x] Historical time range and high-signal developer summary
+- [x] Historical evidence support in `context` and `analyze`
+- [x] Optional test, debugger, and core evidence attachment
+- [ ] Compressed archive input
+- [ ] Explicit incident anchors and time windows
+- [ ] Rotation-family inference without timestamps
+
+### Phase five: general ecosystem
 
 - [ ] JUnit, pytest, and cargo test adapters
 - [ ] CI integrations
-- [ ] Offline field-log import
 - [ ] OpenTelemetry compatibility
 - [ ] Pluggable inputs, parsers, and outputs
 
@@ -568,6 +667,17 @@ mkdir -p /tmp/runsift-demo
 
 The example deliberately returns a non-zero exit code to verify that RunSift
 does not mask a failed test.
+
+The historical-import path can be exercised without running an application:
+
+```bash
+./target/release/runsift import \
+  --case-id historical-demo \
+  --output /tmp/runsift-cases \
+  examples/historical_failure.log
+
+less /tmp/runsift-cases/historical-demo/summary.md
+```
 
 Phase two has a C++-context demo with GoogleTest XML, a custom spdlog profile,
 and a simulated ASan report:

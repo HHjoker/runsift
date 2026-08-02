@@ -24,12 +24,13 @@ fn top_level_help_explains_purpose_output_and_first_command() {
     let help = text(&output);
 
     assert!(output.status.success());
-    assert!(help.contains("captures a program or test run into a compact local evidence bundle"));
+    assert!(help.contains("captures a program or test run, or imports complete historical logs"));
     assert!(help.contains("QUICK START:"));
     assert!(help.contains("runsift run -- ./build/unit_tests"));
+    assert!(help.contains("runsift import --case-id field-4821"));
     assert!(help.contains(".runsift/runs/<run_id>/"));
     assert!(help.contains("summary.md"));
-    assert!(help.contains("runsift context .runsift/runs/<run_id>"));
+    assert!(help.contains("runsift context .runsift/cases/field-4821"));
     assert!(help.contains("Only the explicit `analyze` command"));
 }
 
@@ -43,6 +44,28 @@ fn context_and_analyze_help_make_network_behavior_explicit() {
     assert!(analyze.contains("No model is contacted unless this command is explicitly run"));
     assert!(analyze.contains("local"));
     assert!(analyze.contains("openai"));
+}
+
+#[test]
+fn import_help_explains_historical_and_read_only_behavior() {
+    let help = text(&runsift(&["import", "--help"]));
+
+    assert!(help.contains("complete historical log files"));
+    assert!(help.contains("never modifies the supplied logs"));
+    assert!(help.contains("--recursive"));
+    assert!(help.contains("summary.md"));
+    assert!(help.contains("runsift context <BUNDLE>"));
+}
+
+#[test]
+fn import_without_input_shows_useful_help() {
+    let output = runsift(&["import"]);
+    let help = text(&output);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(help.contains("Usage: runsift import [OPTIONS] <INPUT>..."));
+    assert!(help.contains("Import one historical log"));
+    assert!(!help.contains("required arguments were not provided"));
 }
 
 #[test]

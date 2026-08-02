@@ -15,12 +15,13 @@ use serde_json::{Value, json};
 use crate::cli::{AnalyzeAdapter, AnalyzeArgs, ContextArgs, OpenAiAdapterArgs, OpenAiApi};
 use crate::logs::stable_id;
 use crate::model::{
-    CrashEvidence, Diagnostic, Event, Manifest, Pattern, Severity, TestReport, TestStatus,
+    CaptureMode, CrashEvidence, Diagnostic, Event, Manifest, Pattern, Severity, TestReport,
+    TestStatus,
 };
 use crate::redact;
 
 pub const CONTEXT_PROTOCOL: &str = "runsift.diagnostic-context";
-pub const CONTEXT_PROTOCOL_VERSION: u32 = 1;
+pub const CONTEXT_PROTOCOL_VERSION: u32 = 2;
 pub const ANALYSIS_PROTOCOL: &str = "runsift.analysis";
 pub const ANALYSIS_PROTOCOL_VERSION: u32 = 1;
 const MIN_TOKEN_BUDGET: usize = 600;
@@ -43,7 +44,7 @@ pub struct DiagnosticContext {
     pub generated_at: DateTime<Utc>,
     pub source: ContextSource,
     pub budget: ContextBudget,
-    pub run: ContextRun,
+    pub subject: ContextSubject,
     pub facts: Vec<ContextFact>,
     pub hypotheses: Vec<ContextHypothesis>,
     pub missing_information: Vec<MissingInformation>,
@@ -55,7 +56,10 @@ pub struct DiagnosticContext {
 pub struct ContextSource {
     pub bundle: PathBuf,
     pub evidence_schema_version: u32,
-    pub run_id: String,
+    pub correlation_id: String,
+    pub run_id: Option<String>,
+    pub capture_mode: CaptureMode,
+    pub case_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,12 +73,16 @@ pub struct ContextBudget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextRun {
-    pub command: String,
-    pub success: bool,
+pub struct ContextSubject {
+    pub capture_mode: CaptureMode,
+    pub case_id: Option<String>,
+    pub command: Option<String>,
+    pub success: Option<bool>,
     pub exit_code: Option<i32>,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
+    pub observed_started_at: Option<DateTime<Utc>>,
+    pub observed_finished_at: Option<DateTime<Utc>>,
     pub git_commit: Option<String>,
     pub git_branch: Option<String>,
     pub git_dirty: Option<bool>,
@@ -232,7 +240,7 @@ pub fn analyze_command(args: AnalyzeArgs) -> Result<i32> {
         protocol: ANALYSIS_PROTOCOL.to_owned(),
         protocol_version: ANALYSIS_PROTOCOL_VERSION,
         generated_at: Utc::now(),
-        source_run_id: context.source.run_id,
+        source_run_id: context.source.correlation_id,
         adapter,
         analysis,
     };
@@ -244,9 +252,9 @@ pub fn analyze_command(args: AnalyzeArgs) -> Result<i32> {
 impl EvidenceBundle {
     pub fn load(directory: &Path) -> Result<Self> {
         let manifest: Manifest = read_json(&directory.join("manifest.json"))?;
-        if manifest.schema_version != 2 {
+        if !matches!(manifest.schema_version, 2 | 3) {
             bail!(
-                "unsupported evidence schema {}, expected 2",
+                "unsupported evidence schema {}, expected 2 or 3",
                 manifest.schema_version
             );
         }
@@ -315,12 +323,14 @@ fn empty_context(
     candidate_count: usize,
     missing_information: Vec<MissingInformation>,
 ) -> DiagnosticContext {
-    let command = std::iter::once(&bundle.manifest.command.program)
-        .chain(bundle.manifest.command.args.iter())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let command = redact::text(&command, bundle.manifest.redacted);
+    let command = bundle.manifest.command.as_ref().map(|command| {
+        let value = std::iter::once(&command.program)
+            .chain(command.args.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        redact::text(&value, bundle.manifest.redacted)
+    });
     let git = bundle.manifest.git.as_ref();
     DiagnosticContext {
         protocol: CONTEXT_PROTOCOL.to_owned(),
@@ -329,7 +339,11 @@ fn empty_context(
         source: ContextSource {
             bundle: bundle.directory.clone(),
             evidence_schema_version: bundle.manifest.schema_version,
-            run_id: bundle.manifest.run_id.clone(),
+            correlation_id: bundle.manifest.run_id.clone(),
+            run_id: (bundle.manifest.capture_mode == CaptureMode::Live)
+                .then(|| bundle.manifest.run_id.clone()),
+            capture_mode: bundle.manifest.capture_mode,
+            case_id: bundle.manifest.case_id.clone(),
         },
         budget: ContextBudget {
             max_tokens: token_budget,
@@ -339,12 +353,24 @@ fn empty_context(
             selected_count: 0,
             omitted_count: candidate_count,
         },
-        run: ContextRun {
+        subject: ContextSubject {
+            capture_mode: bundle.manifest.capture_mode,
+            case_id: bundle.manifest.case_id.clone(),
             command,
-            success: bundle.manifest.command.success,
-            exit_code: bundle.manifest.command.exit_code,
+            success: bundle
+                .manifest
+                .command
+                .as_ref()
+                .map(|command| command.success),
+            exit_code: bundle
+                .manifest
+                .command
+                .as_ref()
+                .and_then(|command| command.exit_code),
             started_at: bundle.manifest.started_at,
             finished_at: bundle.manifest.finished_at,
+            observed_started_at: bundle.manifest.observed_started_at,
+            observed_finished_at: bundle.manifest.observed_finished_at,
             git_commit: git.and_then(|value| value.commit.clone()),
             git_branch: git.and_then(|value| value.branch.clone()),
             git_dirty: git.map(|value| value.dirty),
@@ -395,23 +421,43 @@ fn finish_context(context: &mut DiagnosticContext, candidate_count: usize) -> Re
 
 fn candidates(bundle: &EvidenceBundle) -> Vec<Candidate> {
     let mut output = Vec::new();
-    output.push(candidate(
-        bundle.manifest.run_id.clone(),
-        "run",
-        120,
-        format!(
-            "Command `{}` {} with exit code {:?}",
-            bundle.manifest.command.program,
-            if bundle.manifest.command.success {
-                "succeeded"
-            } else {
-                "failed"
-            },
-            bundle.manifest.command.exit_code
-        ),
-        "manifest.json".to_owned(),
-        Vec::new(),
-    ));
+    let root_candidate = if let Some(command) = &bundle.manifest.command {
+        candidate(
+            bundle.manifest.run_id.clone(),
+            "run",
+            120,
+            format!(
+                "Command `{}` {} with exit code {:?}",
+                command.program,
+                if command.success {
+                    "succeeded"
+                } else {
+                    "failed"
+                },
+                command.exit_code
+            ),
+            "manifest.json".to_owned(),
+            Vec::new(),
+        )
+    } else {
+        candidate(
+            bundle.manifest.run_id.clone(),
+            "historical_case",
+            120,
+            format!(
+                "Historical case `{}` imported {} source file(s); original command and exit status are unavailable",
+                bundle
+                    .manifest
+                    .case_id
+                    .as_deref()
+                    .unwrap_or(&bundle.manifest.run_id),
+                bundle.manifest.sources.len()
+            ),
+            "manifest.json".to_owned(),
+            Vec::new(),
+        )
+    };
+    output.push(root_candidate);
 
     for diagnostic in &bundle.diagnostics {
         let frames = diagnostic
@@ -502,7 +548,8 @@ fn candidates(bundle: &EvidenceBundle) -> Vec<Candidate> {
     }
 
     for pattern in bundle.patterns.iter().take(200) {
-        let priority = 60 + u16::from(pattern.severity.priority()) * 5;
+        let keyword_priority = u16::from(crate::logs::is_key_message(&pattern.template)) * 15;
+        let priority = 60 + u16::from(pattern.severity.priority()) * 5 + keyword_priority;
         output.push(candidate(
             pattern.pattern_id.clone(),
             "event_pattern",
@@ -516,17 +563,32 @@ fn candidates(bundle: &EvidenceBundle) -> Vec<Candidate> {
         ));
     }
 
-    for event in bundle
+    let mut key_events = bundle
         .events
         .iter()
-        .filter(|event| event.severity.priority() >= Severity::Warn.priority())
-        .take(200)
-    {
+        .filter(|event| {
+            event.severity.priority() >= Severity::Warn.priority()
+                || crate::logs::is_key_message(&event.message)
+        })
+        .collect::<Vec<_>>();
+    key_events.sort_by(|left, right| {
+        right
+            .severity
+            .priority()
+            .cmp(&left.severity.priority())
+            .then_with(|| {
+                crate::logs::is_key_message(&right.message)
+                    .cmp(&crate::logs::is_key_message(&left.message))
+            })
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    for event in key_events.into_iter().take(200) {
         output.push(candidate(
             event.event_id.clone(),
             "event",
-            55 + u16::from(event.severity.priority()) * 5,
-            event.message.clone(),
+            55 + u16::from(event.severity.priority()) * 5
+                + u16::from(crate::logs::is_key_message(&event.message)) * 15,
+            truncate(&event.message, 4_000),
             format!(
                 "{}:{}-{}",
                 event.evidence.artifact, event.evidence.byte_start, event.evidence.byte_end
@@ -574,6 +636,13 @@ fn candidate(
 
 fn base_missing_information(bundle: &EvidenceBundle) -> Vec<MissingInformation> {
     let mut items = Vec::new();
+    if bundle.manifest.capture_mode == CaptureMode::Import {
+        items.push(missing(
+            "missing_execution_context",
+            "Historical logs do not include the original command, exit status, or complete process lifetime",
+            "The analysis must not infer execution success or reconstruct absent runtime state",
+        ));
+    }
     if bundle.tests.is_empty() {
         items.push(missing(
             "missing_tests",

@@ -5,7 +5,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::model::{
-    CrashEvidence, Diagnostic, Event, Manifest, Pattern, Severity, TestReport, TestStatus,
+    CaptureMode, CrashEvidence, Diagnostic, Event, Manifest, Pattern, Severity, TestReport,
+    TestStatus,
 };
 
 pub fn write_bundle(
@@ -32,7 +33,7 @@ pub fn write_bundle(
 
     fs::write(
         directory.join("summary.md"),
-        markdown(manifest, patterns, tests, diagnostics, crash),
+        markdown(manifest, events, patterns, tests, diagnostics, crash),
     )
     .context("failed to write summary.md")?;
     Ok(())
@@ -49,33 +50,25 @@ fn write_json<T: serde::Serialize + ?Sized>(path: impl AsRef<Path>, value: &T) -
 
 fn markdown(
     manifest: &Manifest,
+    events: &[Event],
     patterns: &[Pattern],
     tests: &[TestReport],
     diagnostics: &[Diagnostic],
     crash: &CrashEvidence,
 ) -> String {
-    let status = if manifest.command.success {
-        "成功"
-    } else {
-        "失败"
+    let title = match manifest.capture_mode {
+        CaptureMode::Live => "# RunSift 运行摘要\n\n",
+        CaptureMode::Import => "# RunSift 历史日志摘要\n\n",
     };
-    let exit = manifest
-        .command
-        .exit_code
-        .map_or_else(|| "被信号终止".to_owned(), |code| code.to_string());
-    let command = std::iter::once(&manifest.command.program)
-        .chain(manifest.command.args.iter())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let mut output = format!(
-        "# RunSift 运行摘要\n\n\
-         - 运行结果：{status}\n\
-         - 退出码：{exit}\n\
-         - 命令：`{command}`\n\
-         - 开始时间：{}\n\
-         - 结束时间：{}\n\
+    let mut output = title.to_owned();
+    let evidence_type = match manifest.capture_mode {
+        CaptureMode::Live => "实时运行",
+        CaptureMode::Import => "历史导入",
+    };
+    output.push_str(&format!(
+        "- 证据类型：`{evidence_type}`\n\
+         - 处理开始时间：{}\n\
+         - 处理结束时间：{}\n\
          - 事件数：{}\n\
          - 事件模式数：{}\n\
          - 测试数：{}（失败/错误 {}）\n\
@@ -89,10 +82,41 @@ fn markdown(
         manifest.failed_test_count,
         manifest.diagnostic_count,
         if manifest.redacted { "是" } else { "否" }
-    );
+    ));
+
+    if let Some(command) = &manifest.command {
+        let status = if command.success { "成功" } else { "失败" };
+        let exit = command
+            .exit_code
+            .map_or_else(|| "被信号终止".to_owned(), |code| code.to_string());
+        let command_line = std::iter::once(&command.program)
+            .chain(command.args.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        output.push_str(&format!(
+            "- 运行结果：{status}\n- 退出码：{exit}\n- 命令：`{command_line}`\n\n"
+        ));
+    } else {
+        output.push_str("- 原始命令与退出状态：历史日志未提供\n\n");
+    }
+
+    output.push_str("## 日志时间范围\n\n");
+    match (manifest.observed_started_at, manifest.observed_finished_at) {
+        (Some(start), Some(end)) => output.push_str(&format!(
+            "- 最早时间：{}\n- 最晚时间：{}\n\n",
+            start.to_rfc3339(),
+            end.to_rfc3339()
+        )),
+        _ => output.push_str("日志中没有识别到带时区的时间戳，无法可靠建立绝对时间范围。\n\n"),
+    }
 
     output.push_str("## 关联上下文\n\n");
-    output.push_str(&format!("- Run ID：`{}`\n", manifest.context.run_id));
+    if let Some(case_id) = &manifest.case_id {
+        output.push_str(&format!("- Case ID：`{case_id}`\n"));
+    } else {
+        output.push_str(&format!("- Run ID：`{}`\n", manifest.context.run_id));
+    }
     if let Some(batch_id) = &manifest.context.batch_id {
         output.push_str(&format!("- Batch ID：`{batch_id}`\n"));
     }
@@ -128,19 +152,31 @@ fn markdown(
         output.push('\n');
     }
 
+    write_source_summary(&mut output, manifest);
+    write_event_overview(&mut output, events);
+
     write_test_summary(&mut output, tests);
     write_diagnostic_summary(&mut output, diagnostics);
     write_crash_summary(&mut output, crash);
     write_rotation_summary(&mut output, manifest);
 
     output.push_str("## 高信号事件模式\n\n");
-    let relevant = patterns
+    let failed_run = manifest
+        .command
+        .as_ref()
+        .is_some_and(|command| !command.success);
+    let mut relevant = patterns
         .iter()
         .filter(|pattern| {
-            pattern.severity.priority() >= Severity::Warn.priority() || !manifest.command.success
+            pattern.severity.priority() >= Severity::Warn.priority()
+                || crate::logs::is_key_message(&pattern.template)
+                || failed_run
         })
         .take(20)
         .collect::<Vec<_>>();
+    if relevant.is_empty() && manifest.capture_mode == CaptureMode::Import {
+        relevant.extend(patterns.iter().take(10));
+    }
 
     if relevant.is_empty() {
         output.push_str("没有识别到 WARN 及以上事件。\n\n");
@@ -166,6 +202,80 @@ fn markdown(
          并通过 `events.jsonl` 回到原始证据。`patterns.json` 仅为派生信息，不替代原始事件。\n",
     );
     output
+}
+
+fn write_source_summary(output: &mut String, manifest: &Manifest) {
+    output.push_str("## 证据来源\n\n");
+    if manifest.sources.is_empty() {
+        output.push_str("没有记录日志来源。\n\n");
+        return;
+    }
+    for source in manifest.sources.iter().take(50) {
+        output.push_str(&format!(
+            "- `{}`：{} bytes",
+            source.path.display(),
+            source.collected_bytes
+        ));
+        if let Some(hash) = &source.sha256 {
+            output.push_str(&format!("，SHA-256 `{hash}`"));
+        }
+        output.push('\n');
+    }
+    output.push('\n');
+}
+
+fn write_event_overview(output: &mut String, events: &[Event]) {
+    let critical = events
+        .iter()
+        .filter(|event| event.severity == Severity::Critical)
+        .count();
+    let errors = events
+        .iter()
+        .filter(|event| event.severity == Severity::Error)
+        .count();
+    let warnings = events
+        .iter()
+        .filter(|event| event.severity == Severity::Warn)
+        .count();
+    let inferred = events
+        .iter()
+        .filter(|event| {
+            event.severity.priority() < Severity::Warn.priority()
+                && crate::logs::is_key_message(&event.message)
+        })
+        .count();
+    output.push_str("## 关键信息概览\n\n");
+    output.push_str(&format!(
+        "- Critical：{critical}\n- Error：{errors}\n- Warn：{warnings}\n- 关键字命中但无明确级别：{inferred}\n\n"
+    ));
+
+    let key_events = events
+        .iter()
+        .filter(|event| {
+            event.severity.priority() >= Severity::Warn.priority()
+                || crate::logs::is_key_message(&event.message)
+        })
+        .take(30)
+        .collect::<Vec<_>>();
+    if key_events.is_empty() {
+        output.push_str("没有识别到高信号事件。\n\n");
+        return;
+    }
+    for event in key_events {
+        let time = event
+            .timestamp
+            .map_or_else(|| "无可靠时间戳".to_owned(), |value| value.to_rfc3339());
+        output.push_str(&format!(
+            "- `{time}` `{:?}` `{}`：{}\n  - 证据：`{}:{}-{}`\n",
+            event.severity,
+            event.event_id,
+            truncate(&event.message.replace('\n', " "), 300),
+            event.evidence.artifact,
+            event.evidence.byte_start,
+            event.evidence.byte_end
+        ));
+    }
+    output.push('\n');
 }
 
 fn write_test_summary(output: &mut String, reports: &[TestReport]) {

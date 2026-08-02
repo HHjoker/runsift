@@ -8,9 +8,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
     name = "runsift",
     version,
     arg_required_else_help = true,
-    about = "Turn runtime evidence into traceable diagnostic context for developers and AI",
-    long_about = "RunSift captures a program or test run into a compact local evidence bundle, then selects high-signal evidence for developers, CI tools, and AI analysis.\n\n`run` and `context` stay local. Only the explicit `analyze` command invokes the model adapter you select. RunSift validates that model findings cite evidence from the generated context and never modifies source code.",
-    after_help = "QUICK START:\n  runsift run -- ./build/unit_tests\n  runsift context .runsift/runs/<run_id> --token-budget 8000\n\nOUTPUT:\n  `run` creates .runsift/runs/<run_id>/ with summary.md and structured evidence.\n  `context` writes ai/context.json and ai/prompt.md without calling a model.\n  `analyze` explicitly sends that context to a configured model adapter.\n\nRun `runsift help <COMMAND>` for options and examples."
+    about = "Turn live runs or historical logs into traceable diagnostic context",
+    long_about = "RunSift captures a program or test run, or imports complete historical logs when a problem cannot be reproduced. It extracts high-signal events into a compact local evidence bundle for developers, CI tools, and AI analysis.\n\n`run`, `import`, and `context` stay local. Only the explicit `analyze` command invokes the model adapter you select. RunSift validates that model findings cite evidence from the generated context and never modifies source code or imported logs.",
+    after_help = "QUICK START:\n  runsift run -- ./build/unit_tests\n  runsift import --case-id field-4821 /var/log/app.log\n  runsift context .runsift/cases/field-4821 --token-budget 8000\n\nOUTPUT:\n  `run` creates .runsift/runs/<run_id>/ for a live command.\n  `import` creates .runsift/cases/<case_id>/ for historical evidence.\n  Both contain summary.md plus traceable JSON evidence.\n  `context` stays local; `analyze` explicitly invokes a selected model adapter.\n\nRun `runsift help <COMMAND>` for options and examples."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -27,6 +27,13 @@ pub enum Command {
     Run(RunArgs),
 
     #[command(
+        about = "Import historical log files into a traceable evidence bundle",
+        long_about = "Read complete historical log files without executing the original program, preserve source hashes and byte offsets, extract structured events, high-signal patterns, sanitizer findings, and a developer-readable summary.\n\nThis command is local-only and never modifies the supplied logs. Directories include their immediate regular files; pass --recursive to include nested directories.",
+        after_help = "EXAMPLES:\n  Import one historical log:\n    runsift import --case-id field-4821 /var/log/app.log\n\n  Import a directory recursively with a custom spdlog profile:\n    runsift import --recursive --log-profile profile.json ./field-logs\n\n  Attach test and debugger evidence:\n    runsift import app.log --test-report gtest.xml --debugger-report gdb.txt\n\nAfter import, open summary.md or run `runsift context <BUNDLE>`."
+    )]
+    Import(ImportArgs),
+
+    #[command(
         about = "Build a token-budgeted, citation-ready AI context from a bundle",
         long_about = "Read an existing RunSift evidence bundle, select the highest-signal evidence under an approximate token budget, and generate a stable diagnostic context plus a model prompt.\n\nThis command is local-only. It does not call a model or upload evidence.",
         after_help = "EXAMPLES:\n  Write ai/context.json and ai/prompt.md:\n    runsift context .runsift/runs/run_20260802_1234\n\n  Print machine-readable context for another tool:\n    runsift context .runsift/runs/run_20260802_1234 --stdout\n\nToken counts are deterministic estimates, not provider-specific tokenizer results."
@@ -39,6 +46,54 @@ pub enum Command {
         after_help = "EXAMPLES:\n  Local command adapter (prompt is sent on stdin):\n    runsift analyze .runsift/runs/<run_id> local -- ollama run qwen3\n\n  OpenAI Responses-compatible endpoint:\n    runsift analyze .runsift/runs/<run_id> openai \\\n      --base-url https://api.openai.com/v1 \\\n      --model <MODEL> --api-key-env OPENAI_API_KEY"
     )]
     Analyze(AnalyzeArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(arg_required_else_help = true)]
+pub struct ImportArgs {
+    /// Historical log file or directory. May be repeated.
+    #[arg(required = true, value_name = "INPUT")]
+    pub inputs: Vec<PathBuf>,
+
+    /// Include nested directories when an input is a directory.
+    #[arg(long)]
+    pub recursive: bool,
+
+    /// JSON profile describing a project-specific spdlog line format.
+    #[arg(long = "log-profile", value_name = "PATH", help_heading = "PARSING")]
+    pub log_profile: Option<PathBuf>,
+
+    /// Existing CTest, GoogleTest, or JUnit XML report to attach.
+    #[arg(
+        long = "test-report",
+        value_name = "PATH",
+        help_heading = "RELATED EVIDENCE"
+    )]
+    pub test_reports: Vec<PathBuf>,
+
+    /// Existing core dump to describe without copying it.
+    #[arg(long = "core", value_name = "PATH", help_heading = "RELATED EVIDENCE")]
+    pub core_dumps: Vec<PathBuf>,
+
+    /// Existing GDB or LLDB text report to import.
+    #[arg(
+        long = "debugger-report",
+        value_name = "PATH",
+        help_heading = "RELATED EVIDENCE"
+    )]
+    pub debugger_reports: Vec<PathBuf>,
+
+    /// Stable investigation case ID supplied by a user or ticket system.
+    #[arg(long, value_name = "ID", help_heading = "CORRELATION")]
+    pub case_id: Option<String>,
+
+    /// Parent directory for generated historical evidence bundles.
+    #[arg(short, long, default_value = ".runsift/cases", help_heading = "OUTPUT")]
+    pub output: PathBuf,
+
+    /// Keep obvious secrets in the generated bundle.
+    #[arg(long, default_value_t = false, help_heading = "OUTPUT")]
+    pub no_redact: bool,
 }
 
 #[derive(Debug, Args)]

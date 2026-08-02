@@ -7,6 +7,7 @@ use crate::logs::stable_id;
 use crate::model::{
     CorrelationContext, Diagnostic, DiagnosticKind, Event, EvidenceRef, StackFrame,
 };
+use crate::redact;
 
 static ASAN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^(?:==\d+==)?ERROR: AddressSanitizer: (?P<summary>[^\r\n]+)").unwrap()
@@ -48,6 +49,7 @@ pub fn parse(
     artifact: &str,
     context: &CorrelationContext,
     events: &[Event],
+    redact_enabled: bool,
 ) -> Vec<Diagnostic> {
     let mut starts = Vec::new();
     collect_starts(&mut starts, &ASAN, DiagnosticKind::Address, content);
@@ -94,8 +96,20 @@ pub fn parse(
                 diagnostic_id,
                 context: context.clone(),
                 kind: start.kind,
-                summary: start.summary.clone(),
-                stack_frames: parse_stack_frames(block),
+                summary: redact::text(&start.summary, redact_enabled),
+                stack_frames: parse_stack_frames(block)
+                    .into_iter()
+                    .map(|mut frame| {
+                        frame.raw = redact::text(&frame.raw, redact_enabled);
+                        frame.function = frame
+                            .function
+                            .map(|value| redact::text(&value, redact_enabled));
+                        frame.file = frame.file.map(|value| {
+                            redact::text(&value.to_string_lossy(), redact_enabled).into()
+                        });
+                        frame
+                    })
+                    .collect(),
                 evidence: EvidenceRef {
                     artifact: artifact.to_owned(),
                     source_path: source_path.to_path_buf(),

@@ -13,7 +13,7 @@ use crate::crash;
 use crate::diagnostics;
 use crate::git;
 use crate::logs;
-use crate::model::{CommandResult, CorrelationContext, CrashEvidence, Manifest};
+use crate::model::{CaptureMode, CommandResult, CorrelationContext, CrashEvidence, Manifest};
 use crate::pattern;
 use crate::profile::LogProfile;
 use crate::redact;
@@ -49,6 +49,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
     };
     let context = CorrelationContext {
         run_id: run_id.clone(),
+        case_id: None,
         batch_id: args
             .batch_id
             .as_deref()
@@ -201,6 +202,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
         "stderr.log",
         &context,
         &events,
+        redact_enabled,
     );
 
     let mut test_reports = Vec::new();
@@ -258,13 +260,17 @@ pub fn run(args: RunArgs) -> Result<i32> {
         success: status.success(),
     };
     let manifest = Manifest {
-        schema_version: 2,
+        schema_version: 3,
+        capture_mode: CaptureMode::Live,
         run_id: run_id.clone(),
+        case_id: None,
         context,
         started_at,
         finished_at,
         working_directory: cwd,
-        command: command_result,
+        command: Some(command_result),
+        observed_started_at: Some(started_at),
+        observed_finished_at: Some(finished_at),
         redacted: redact_enabled,
         git: git_info,
         sources,
