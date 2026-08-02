@@ -249,8 +249,11 @@ pub fn run(args: RunArgs) -> Result<i32> {
         .sum();
 
     let command_result = CommandResult {
-        program: display(program),
-        args: command_args.iter().map(display).collect(),
+        program: redact::text(&display(program), redact_enabled),
+        args: command_args
+            .iter()
+            .map(|value| redact::text(&display(value), redact_enabled))
+            .collect(),
         exit_code: status.code(),
         success: status.success(),
     };

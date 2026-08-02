@@ -29,7 +29,7 @@ impl Severity {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CorrelationContext {
     pub run_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,7 +38,7 @@ pub struct CorrelationContext {
     pub test_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceRef {
     pub artifact: String,
     pub source_path: PathBuf,
@@ -46,7 +46,7 @@ pub struct EvidenceRef {
     pub byte_end: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub event_id: String,
     pub context: CorrelationContext,
@@ -63,7 +63,7 @@ pub struct Event {
     pub evidence: EvidenceRef,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pattern {
     pub pattern_id: String,
     pub severity: Severity,
@@ -74,7 +74,7 @@ pub struct Pattern {
     pub representative_event_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GitInfo {
     pub root: PathBuf,
     pub commit: Option<String>,
@@ -83,7 +83,7 @@ pub struct GitInfo {
     pub changed_files: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SourceSummary {
     pub path: PathBuf,
     pub initial_size: u64,
@@ -95,7 +95,7 @@ pub struct SourceSummary {
     pub segments: Vec<SourceSegment>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceSegment {
     pub path: PathBuf,
     pub artifact: String,
@@ -103,7 +103,7 @@ pub struct SourceSegment {
     pub byte_end: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TestFramework {
     CTest,
@@ -111,7 +111,7 @@ pub enum TestFramework {
     JUnit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TestStatus {
     Passed,
@@ -120,7 +120,7 @@ pub enum TestStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestCase {
     pub test_id: String,
     pub suite: String,
@@ -134,7 +134,7 @@ pub struct TestCase {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestReport {
     pub source_path: PathBuf,
     pub artifact: String,
@@ -147,7 +147,7 @@ pub struct TestReport {
     pub tests: Vec<TestCase>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticKind {
     #[serde(rename = "address_sanitizer")]
@@ -168,7 +168,7 @@ impl DiagnosticKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackFrame {
     pub index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,7 @@ pub struct StackFrame {
     pub raw: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub diagnostic_id: String,
     pub context: CorrelationContext,
@@ -193,7 +193,7 @@ pub struct Diagnostic {
     pub event_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoreDump {
     pub core_id: String,
     pub path: PathBuf,
@@ -203,7 +203,7 @@ pub struct CoreDump {
     pub format: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DebuggerKind {
     Gdb,
@@ -211,7 +211,7 @@ pub enum DebuggerKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebuggerReport {
     pub report_id: String,
     pub context: CorrelationContext,
@@ -223,13 +223,13 @@ pub struct DebuggerReport {
     pub stack_frames: Vec<StackFrame>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashEvidence {
     pub core_dumps: Vec<CoreDump>,
     pub debugger_reports: Vec<DebuggerReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CommandResult {
     pub program: String,
     pub args: Vec<String>,
@@ -237,7 +237,7 @@ pub struct CommandResult {
     pub success: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema_version: u32,
     pub run_id: String,

@@ -10,14 +10,17 @@ test or program command, captures its output and selected logs, then turns
 large amounts of unstructured text into structured events, recurring patterns,
 and a readable summary.
 
-RunSift does not call an AI model or modify code. It first solves the more
-fundamental problem: giving humans and downstream AI complete, concise, and
-verifiable evidence of what happened during a failed run.
+The `run` and `context` commands do not call an AI model or modify code. Model
+access happens only through an explicit `analyze` command and adapter. This
+keeps the more fundamental problem separate: giving humans and downstream AI
+complete, concise, and verifiable evidence of what happened during a failed
+run.
 
 > [!IMPORTANT]
 > RunSift is at an early stage. Evidence schemas and command-line options may
 > change before `1.0`. The Rust library API is also experimental. RunSift
-> `0.2` writes evidence schema version `2`.
+> `0.3` writes evidence schema version `2` and diagnostic-context protocol
+> version `1`.
 
 ## Why RunSift?
 
@@ -87,6 +90,17 @@ Phase two adds C++-specific engineering context:
 | Crash context | Records core metadata and imports GDB/LLDB text reports |
 | Correlation | Propagates `run_id`, `batch_id`, and `test_id` into evidence |
 | Log rotation | Uses file identity on Unix-like systems to recover both sides of rename-based rotation |
+
+Phase three turns that evidence into a controlled AI handoff:
+
+| Capability | Current behavior |
+|---|---|
+| Token budget | Selects higher-priority evidence under a deterministic approximate budget |
+| Context protocol | Separates facts, hypotheses, missing information, evidence, and response rules |
+| Evidence citations | Rejects model findings and hypotheses that cite unavailable evidence IDs |
+| Local adapter | Sends the generated prompt to an explicit local process over stdin |
+| OpenAI-compatible adapter | Supports Responses by default and Chat Completions as a compatibility mode |
+| Tool integration | Emits context as JSON on stdout for agents, CI, and custom tools |
 
 ## Quick start
 
@@ -196,6 +210,51 @@ RunSift records core metadata but does not copy a potentially large core file
 or execute a debugger. The supplied GDB/LLDB text report is redacted and copied
 into the bundle.
 
+### Build AI-ready context locally
+
+After `run` creates a bundle, select its highest-signal evidence under an
+approximate token budget:
+
+```bash
+runsift context .runsift/runs/<run_id> --token-budget 8000
+```
+
+This writes `ai/context.json` and `ai/prompt.md`. It is local-only and does not
+contact a model. For a machine-readable tool interface:
+
+```bash
+runsift context .runsift/runs/<run_id> --stdout
+```
+
+The context contains observed facts, an intentionally empty hypothesis list,
+known evidence gaps, selected evidence, and the exact response schema. See the
+[diagnostic context protocol](docs/diagnostic-context-v1.md).
+
+### Analyze through an explicit adapter
+
+Use any local command that reads a prompt from stdin and returns RunSift
+analysis JSON on stdout:
+
+```bash
+runsift analyze .runsift/runs/<run_id> local -- \
+  ollama run qwen3
+```
+
+Or use an OpenAI-compatible endpoint:
+
+```bash
+export OPENAI_API_KEY="..."
+
+runsift analyze .runsift/runs/<run_id> openai \
+  --model <MODEL> \
+  --api-key-env OPENAI_API_KEY
+```
+
+The Responses API shape is the default. Use `--api chat-completions` for a
+compatible server that only implements that endpoint. RunSift validates the
+returned JSON and refuses to write findings or hypotheses without citations to
+evidence selected into the context.
+
 ## Evidence bundle
 
 Each run creates an isolated directory:
@@ -212,6 +271,10 @@ Each run creates an isolated directory:
     ├── crash.json
     ├── stdout.log
     ├── stderr.log
+    ├── ai/
+    │   ├── context.json
+    │   ├── prompt.md
+    │   └── analysis.json
     ├── debugger/
     │   └── 000-lldb-backtrace.txt
     ├── tests/
@@ -303,6 +366,9 @@ Provides a directly readable report containing:
   stack frames and byte-addressable evidence.
 - `crash.json` contains lightweight core-dump metadata and parsed GDB/LLDB
   reports.
+- `ai/context.json` and `ai/prompt.md` contain the local, budgeted model handoff;
+  `ai/analysis.json` is created only after an explicit adapter call and
+  citation validation.
 
 ## spdlog compatibility
 
@@ -349,6 +415,9 @@ Generated bundles apply basic redaction by default for:
 - `password` / `passwd`
 - `secret`
 
+The same redaction is applied to captured command arguments and is applied
+again while building AI context, including when reading an older bundle.
+
 Redaction can be disabled for a trusted, local-only workflow:
 
 ```bash
@@ -357,6 +426,11 @@ runsift run --no-redact -- ./build/bin/unit_tests
 
 Review the bundle before uploading or sharing it. Pattern-based redaction
 cannot guarantee removal of every project-specific secret.
+
+`run` and `context` never upload evidence. `analyze local` invokes only the
+provided process. `analyze openai` sends the generated prompt to the configured
+base URL; API keys are read from the named environment variable and are not
+stored in the bundle.
 
 Original logs remain in their original locations. Evidence byte offsets refer
 to those original files. If redaction changes text length, those offsets do not
@@ -375,8 +449,9 @@ Core collection does not depend on a model provider.
 
 ### Facts before inference
 
-The current version collects and organizes facts. It does not claim that it has
-identified the root cause.
+RunSift-generated context keeps observed facts separate from model-generated
+hypotheses and names missing information explicitly. A model may propose a root
+cause, but its claims must cite selected evidence.
 
 ### Derived data never replaces evidence
 
@@ -403,7 +478,15 @@ require replacing spdlog or modifying C++ business logic.
   not execute debugger commands.
 - Core files are described but intentionally not copied into the bundle.
 - Full source code and Git diffs are not copied into the bundle.
-- RunSift does not call AI, produce root-cause claims, or modify code.
+- Token counts use a deterministic provider-independent estimate, not a model's
+  exact tokenizer.
+- The OpenAI adapter is deliberately small and does not implement retries,
+  streaming, conversation state, or provider-specific tool calls.
+- The JSON stdout interface is available; a dedicated MCP server is not yet
+  implemented.
+- RunSift validates evidence IDs and response shape, but cannot prove that a
+  model's interpretation is logically correct.
+- RunSift never modifies source code.
 - Collection and aggregation are primarily in-memory and are not intended for
   unbounded log streams yet.
 
@@ -421,7 +504,7 @@ require replacing spdlog or modifying C++ business logic.
 - [x] Record Git metadata
 - [x] Generate JSONL, JSON, and Markdown bundles
 
-### Phase two: C++ engineering context — current
+### Phase two: C++ engineering context
 
 - [x] Structured CTest and GoogleTest results
 - [x] Configurable spdlog profiles
@@ -430,14 +513,15 @@ require replacing spdlog or modifying C++ business logic.
 - [x] Context correlation using `run_id`, `test_id`, and `batch_id`
 - [x] More reliable log-rotation tracking
 
-### Phase three: AI context gateway
+### Phase three: AI context gateway — current
 
-- [ ] Evidence selection under a token budget
-- [ ] Explicit separation of facts, hypotheses, and missing information
-- [ ] Stable diagnostic context protocol for AI
-- [ ] Local-model and OpenAI-compatible adapters
-- [ ] MCP or equivalent tool interface
-- [ ] Required evidence citations in analysis results
+- [x] Evidence selection under a token budget
+- [x] Explicit separation of facts, hypotheses, and missing information
+- [x] Stable diagnostic context protocol for AI
+- [x] Local-model and OpenAI-compatible adapters
+- [x] Machine-readable CLI tool interface (`context --stdout`)
+- [x] Required evidence citations in analysis results
+- [ ] Dedicated MCP server
 
 ### Phase four: general ecosystem
 
@@ -503,6 +587,13 @@ touch /tmp/runsift-phase2/application.log
   sh examples/demo_phase2_failure.sh \
     /tmp/runsift-phase2/application.log \
     /tmp/runsift-phase2/gtest.xml
+```
+
+Use the generated directory to exercise phase three without contacting a
+model:
+
+```bash
+runsift context /tmp/runsift-phase2/runs/<run_id> --token-budget 8000
 ```
 
 ## Contributing

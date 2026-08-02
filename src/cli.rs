@@ -1,16 +1,16 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "runsift",
     version,
     arg_required_else_help = true,
-    about = "Capture a program or test run into a traceable diagnostic evidence bundle",
-    long_about = "RunSift executes a program or test command, streams its output, collects selected logs and C++ diagnostics, then writes a compact local evidence bundle for developers, CI tools, and AI analysis.\n\nIt does not call an AI model or modify source code. Its job is to preserve what happened at runtime in a structured, redacted, and traceable form.",
-    after_help = "QUICK START:\n  runsift run -- ./build/unit_tests\n  runsift run --log build/logs/app.log -- ctest --test-dir build --output-on-failure\n\nOUTPUT:\n  Each run creates .runsift/runs/<run_id>/ with summary.md, manifest.json,\n  events.jsonl, patterns.json, and any C++-specific evidence.\n\nRun `runsift help run` for collection options and more examples."
+    about = "Turn runtime evidence into traceable diagnostic context for developers and AI",
+    long_about = "RunSift captures a program or test run into a compact local evidence bundle, then selects high-signal evidence for developers, CI tools, and AI analysis.\n\n`run` and `context` stay local. Only the explicit `analyze` command invokes the model adapter you select. RunSift validates that model findings cite evidence from the generated context and never modifies source code.",
+    after_help = "QUICK START:\n  runsift run -- ./build/unit_tests\n  runsift context .runsift/runs/<run_id> --token-budget 8000\n\nOUTPUT:\n  `run` creates .runsift/runs/<run_id>/ with summary.md and structured evidence.\n  `context` writes ai/context.json and ai/prompt.md without calling a model.\n  `analyze` explicitly sends that context to a configured model adapter.\n\nRun `runsift help <COMMAND>` for options and examples."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -25,6 +25,20 @@ pub enum Command {
         after_help = "EXAMPLES:\n  Run a test binary:\n    runsift run -- ./build/unit_tests\n\n  Capture spdlog output from CTest:\n    runsift run --log build/logs/app.log -- \\\n      ctest --test-dir build --output-on-failure\n\n  Capture structured CTest results:\n    runsift run --test-report build/ctest.xml -- \\\n      ctest --test-dir build --output-junit build/ctest.xml\n\nThe `--` separator is required. Everything after it is the program and its arguments."
     )]
     Run(RunArgs),
+
+    #[command(
+        about = "Build a token-budgeted, citation-ready AI context from a bundle",
+        long_about = "Read an existing RunSift evidence bundle, select the highest-signal evidence under an approximate token budget, and generate a stable diagnostic context plus a model prompt.\n\nThis command is local-only. It does not call a model or upload evidence.",
+        after_help = "EXAMPLES:\n  Write ai/context.json and ai/prompt.md:\n    runsift context .runsift/runs/run_20260802_1234\n\n  Print machine-readable context for another tool:\n    runsift context .runsift/runs/run_20260802_1234 --stdout\n\nToken counts are deterministic estimates, not provider-specific tokenizer results."
+    )]
+    Context(ContextArgs),
+
+    #[command(
+        about = "Analyze a bundle through an explicit local or OpenAI-compatible adapter",
+        long_about = "Build the same citation-ready context as `runsift context`, invoke the selected model adapter, validate the returned JSON, and reject findings or hypotheses that do not cite evidence included in the context.\n\nNo model is contacted unless this command is explicitly run.",
+        after_help = "EXAMPLES:\n  Local command adapter (prompt is sent on stdin):\n    runsift analyze .runsift/runs/<run_id> local -- ollama run qwen3\n\n  OpenAI Responses-compatible endpoint:\n    runsift analyze .runsift/runs/<run_id> openai \\\n      --base-url https://api.openai.com/v1 \\\n      --model <MODEL> --api-key-env OPENAI_API_KEY"
+    )]
+    Analyze(AnalyzeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -90,4 +104,109 @@ pub struct RunArgs {
         value_name = "COMMAND"
     )]
     pub command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
+pub struct ContextArgs {
+    /// Existing RunSift evidence bundle directory.
+    #[arg(value_name = "BUNDLE")]
+    pub bundle: PathBuf,
+
+    /// Approximate maximum tokens for the generated model prompt.
+    #[arg(long, default_value_t = 8_000, value_name = "TOKENS")]
+    pub token_budget: usize,
+
+    /// Context JSON path. Defaults to BUNDLE/ai/context.json.
+    #[arg(long, value_name = "PATH", conflicts_with = "stdout")]
+    pub output: Option<PathBuf>,
+
+    /// Model prompt path. Defaults to BUNDLE/ai/prompt.md.
+    #[arg(long, value_name = "PATH", conflicts_with = "stdout")]
+    pub prompt_output: Option<PathBuf>,
+
+    /// Print context JSON to stdout instead of writing files.
+    #[arg(long)]
+    pub stdout: bool,
+
+    /// Replace existing generated context files.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AnalyzeArgs {
+    /// Existing RunSift evidence bundle directory.
+    #[arg(value_name = "BUNDLE")]
+    pub bundle: PathBuf,
+
+    /// Approximate maximum tokens for model input.
+    #[arg(long, default_value_t = 8_000, value_name = "TOKENS")]
+    pub token_budget: usize,
+
+    /// Validated analysis JSON path. Defaults to BUNDLE/ai/analysis.json.
+    #[arg(long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
+    /// Replace an existing analysis file.
+    #[arg(long)]
+    pub force: bool,
+
+    #[command(subcommand)]
+    pub adapter: AnalyzeAdapter,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AnalyzeAdapter {
+    /// Send the prompt to a local process over stdin and read JSON from stdout.
+    Local(LocalAdapterArgs),
+
+    /// Call an OpenAI-compatible Responses or Chat Completions endpoint.
+    Openai(OpenAiAdapterArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LocalAdapterArgs {
+    /// Local model command. Must follow the `--` separator.
+    #[arg(
+        required = true,
+        last = true,
+        allow_hyphen_values = true,
+        value_name = "COMMAND"
+    )]
+    pub command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
+pub struct OpenAiAdapterArgs {
+    /// API base URL containing the /responses endpoint.
+    #[arg(long, default_value = "https://api.openai.com/v1", value_name = "URL")]
+    pub base_url: String,
+
+    /// Model identifier accepted by the endpoint.
+    #[arg(long, value_name = "MODEL")]
+    pub model: String,
+
+    /// Environment variable containing a bearer token. Omit for unauthenticated local servers.
+    #[arg(long, value_name = "NAME")]
+    pub api_key_env: Option<String>,
+
+    /// HTTP timeout in seconds.
+    #[arg(long, default_value_t = 120, value_name = "SECONDS")]
+    pub timeout: u64,
+
+    /// Ask for JSON in the prompt without sending a strict response schema.
+    #[arg(long)]
+    pub plain_json: bool,
+
+    /// OpenAI-compatible endpoint style.
+    #[arg(long, value_enum, default_value_t = OpenAiApi::Responses)]
+    pub api: OpenAiApi,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OpenAiApi {
+    /// POST /responses using the current OpenAI Responses shape.
+    Responses,
+    /// POST /chat/completions for compatible servers using the older chat shape.
+    ChatCompletions,
 }

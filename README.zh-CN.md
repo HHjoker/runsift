@@ -7,12 +7,14 @@
 RunSift 是一个本地优先、模型无关的工程诊断上下文工具。它包装执行测试或程序命令，
 采集运行输出和指定日志，将大量非结构化信息整理成结构化事件、重复模式和可读摘要。
 
-RunSift 当前不会调用大模型，也不会修改代码。它首先解决更基础的问题：让后续的人或
-AI 获得完整、精简并且可以回到原始现场的证据。
+`run` 和 `context` 命令不会调用大模型，也不会修改代码。只有显式执行 `analyze`
+并选择适配器时才会访问模型。这样可以先独立解决更基础的问题：让后续的人或 AI
+获得完整、精简并且可以回到原始现场的证据。
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段，证据格式和命令行参数在 `1.0` 之前可能调整。
-> Rust library API 目前也不保证稳定。RunSift `0.2` 生成的证据格式版本为 `2`。
+> Rust library API 目前也不保证稳定。RunSift `0.3` 生成的证据格式版本为 `2`，
+> 诊断上下文协议版本为 `1`。
 
 ## 为什么需要 RunSift
 
@@ -80,6 +82,17 @@ CTest / 可执行程序
 | 崩溃上下文 | 记录 core 元数据并导入 GDB/LLDB 文本报告 |
 | 上下文关联 | 将 `run_id`、`batch_id`、`test_id` 传递到证据中 |
 | 日志轮转 | 在类 Unix 系统利用文件身份找回 rename 轮转前后的两段日志 |
+
+第三阶段将证据转换为受控的 AI 输入和输出：
+
+| 能力 | 当前行为 |
+|---|---|
+| Token 预算 | 使用确定性的近似预算，优先选择高价值证据 |
+| 上下文协议 | 分开表达事实、推断、缺失信息、证据和响应约束 |
+| 证据引用 | 拒绝引用上下文之外证据 ID 的分析结论和推断 |
+| 本地适配器 | 通过 stdin 将 prompt 交给显式指定的本地进程 |
+| OpenAI-compatible 适配器 | 默认支持 Responses，也提供 Chat Completions 兼容模式 |
+| 工具集成 | 将上下文输出为 stdout JSON，供 Agent、CI 或自研工具使用 |
 
 ## 快速开始
 
@@ -185,6 +198,47 @@ runsift run \
 RunSift 只记录 core 元数据，不复制可能非常大的 core 文件，也不会主动执行调试器。
 传入的 GDB/LLDB 文本报告会经过脱敏后复制到诊断包中。
 
+### 在本地生成 AI 上下文
+
+`run` 创建诊断包后，可以按近似 Token 预算选择其中信号最高的证据：
+
+```bash
+runsift context .runsift/runs/<run_id> --token-budget 8000
+```
+
+该命令写入 `ai/context.json` 和 `ai/prompt.md`，只在本地工作，不访问模型。
+如果其他工具需要机器可读输出：
+
+```bash
+runsift context .runsift/runs/<run_id> --stdout
+```
+
+上下文包含已观察事实、刻意保持为空的推断列表、已知证据缺口、选中的证据和精确的
+响应格式。详见[诊断上下文协议](docs/diagnostic-context-v1.md)。
+
+### 通过显式适配器进行分析
+
+任意能够从 stdin 读取 prompt、在 stdout 返回 RunSift 分析 JSON 的本地命令都可接入：
+
+```bash
+runsift analyze .runsift/runs/<run_id> local -- \
+  ollama run qwen3
+```
+
+也可以调用 OpenAI-compatible 服务：
+
+```bash
+export OPENAI_API_KEY="..."
+
+runsift analyze .runsift/runs/<run_id> openai \
+  --model <MODEL> \
+  --api-key-env OPENAI_API_KEY
+```
+
+默认使用 Responses API 结构。只实现了旧兼容端点的服务可以添加
+`--api chat-completions`。RunSift 会校验返回 JSON；任何没有引用已选证据的结论或
+推断都不会被写入有效分析文件。
+
 ## 诊断包
 
 每次运行会在输出目录创建一个独立目录：
@@ -201,6 +255,10 @@ RunSift 只记录 core 元数据，不复制可能非常大的 core 文件，也
     ├── crash.json
     ├── stdout.log
     ├── stderr.log
+    ├── ai/
+    │   ├── context.json
+    │   ├── prompt.md
+    │   └── analysis.json
     ├── debugger/
     │   └── 000-lldb-backtrace.txt
     ├── tests/
@@ -287,6 +345,8 @@ invalid record length <num> at offset <num>
   并指向复制到 `tests/` 下的脱敏源 XML；
 - `diagnostics.json` 保存结构化 ASan、UBSan、TSan 问题、调用栈和字节级证据位置；
 - `crash.json` 保存轻量 core dump 元数据和解析后的 GDB/LLDB 报告。
+- `ai/context.json` 和 `ai/prompt.md` 保存本地生成、受预算约束的模型交接内容；
+  `ai/analysis.json` 只在显式调用适配器并通过引用校验后生成。
 
 ## spdlog 格式
 
@@ -332,6 +392,9 @@ runsift run \
 - `password` / `passwd`
 - `secret`
 
+命令行参数也使用相同规则脱敏；生成 AI 上下文时还会再次执行脱敏，包括读取旧诊断包
+的场景。
+
 在完全可信的本地环境中，可以关闭脱敏：
 
 ```bash
@@ -339,6 +402,10 @@ runsift run --no-redact -- ./build/bin/unit_tests
 ```
 
 关闭前请确认诊断包不会上传或分享给不可信的系统。
+
+`run` 和 `context` 不上传证据。`analyze local` 只调用用户指定的进程；
+`analyze openai` 会把生成的 prompt 发送到配置的 base URL。API Key 从指定环境变量
+读取，不会写入诊断包。
 
 原始日志仍保留在原位置。事件中的字节偏移指向原始文件；如果脱敏改变了文本长度，
 该偏移不用于定位诊断包内的脱敏副本。
@@ -355,7 +422,8 @@ runsift run --no-redact -- ./build/bin/unit_tests
 
 ### 事实与推断分离
 
-当前版本只采集和整理事实，不声称已经找到根因。
+RunSift 生成的上下文将已观察事实与模型推断分开，并显式说明缺失信息。模型可以提出
+根因，但所有结论必须引用已选证据。
 
 ### 派生信息不替代原始证据
 
@@ -376,7 +444,11 @@ spdlog。
 - RunSift 不主动执行 GDB/LLDB，只导入预先生成的文本报告；
 - core 文件只记录元数据，不复制到诊断包；
 - 不复制完整源码或 Git diff；
-- 不调用 AI，不生成根因结论，也不修改代码；
+- Token 数量是与厂商无关的确定性估算，不是具体模型 tokenizer 的精确结果；
+- OpenAI 适配器保持精简，暂不支持重试、流式响应、对话状态或厂商特定工具调用；
+- 已提供 JSON stdout 工具接口，尚未实现独立 MCP Server；
+- RunSift 能校验证据 ID 和响应格式，但不能证明模型解释在逻辑上一定正确；
+- RunSift 不会修改源码；
 - 当前采集和聚合主要在内存完成，不适合无边界的超大日志输入。
 
 ## 路线图
@@ -393,7 +465,7 @@ spdlog。
 - [x] Git 元数据
 - [x] JSONL/JSON/Markdown 诊断包
 
-### 阶段二：C++ 工程增强（当前）
+### 阶段二：C++ 工程增强
 
 - [x] CTest 和 GoogleTest 结构化结果
 - [x] 可配置 spdlog profile
@@ -402,14 +474,15 @@ spdlog。
 - [x] `run_id`、`test_id`、`batch_id` 等上下文关联
 - [x] 更可靠的日志轮转跟踪
 
-### 阶段三：AI 中转层
+### 阶段三：AI 中转层（当前）
 
-- [ ] 面向 token 预算的证据选择
-- [ ] 明确区分事实、推断和缺失信息
-- [ ] AI 使用的稳定诊断上下文协议
-- [ ] 本地模型和 OpenAI-compatible 接口
-- [ ] MCP 或其他工具调用接口
-- [ ] 分析结论到 `event_id` 的强制引用
+- [x] 面向 token 预算的证据选择
+- [x] 明确区分事实、推断和缺失信息
+- [x] AI 使用的稳定诊断上下文协议
+- [x] 本地模型和 OpenAI-compatible 接口
+- [x] 机器可读 CLI 工具接口（`context --stdout`）
+- [x] 分析结论到证据 ID 的强制引用
+- [ ] 独立 MCP Server
 
 ### 阶段四：通用生态
 
@@ -474,6 +547,12 @@ touch /tmp/runsift-phase2/application.log
   sh examples/demo_phase2_failure.sh \
     /tmp/runsift-phase2/application.log \
     /tmp/runsift-phase2/gtest.xml
+```
+
+可以直接使用生成的目录测试第三阶段，并且不访问任何模型：
+
+```bash
+runsift context /tmp/runsift-phase2/runs/<run_id> --token-budget 8000
 ```
 
 ## 参与贡献
