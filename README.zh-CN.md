@@ -170,6 +170,18 @@ less .runsift/cases/field-4821/summary.md
   --token-budget 8000
 ```
 
+### 本地查证历史日志
+
+```bash
+runsift inspect .runsift/cases/field-4821 overview
+runsift inspect .runsift/cases/field-4821 search A17 --limit 20
+runsift inspect .runsift/cases/field-4821 evidence <EVENT_ID> --around 3
+```
+
+三个命令都输出 JSON。搜索对已解析消息做区分大小写的子串匹配，
+不按日志级别筛除事件。回读返回解析后的事件以及同一产物中的相邻事件。
+字节偏移指向原始来源，不能直接用于切片脱敏副本。
+
 ### 捕获一次 CTest 运行
 
 假设 C++ 程序使用 spdlog 写入 `build/logs/application.log`：

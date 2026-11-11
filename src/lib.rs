@@ -5,6 +5,7 @@ pub mod crash;
 pub mod diagnostics;
 pub mod git;
 pub mod importer;
+pub mod inspect;
 pub mod logs;
 pub mod model;
 pub mod pattern;

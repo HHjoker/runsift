@@ -33,6 +33,9 @@ pub enum Command {
     )]
     Import(ImportArgs),
 
+    /// Inspect an evidence bundle locally and return JSON.
+    Inspect(InspectArgs),
+
     #[command(
         about = "Build a token-budgeted, citation-ready AI context from a bundle",
         long_about = "Read an existing RunSift evidence bundle, select the highest-signal evidence under an approximate token budget, and generate a stable diagnostic context plus a model prompt.\n\nThis command is local-only. It does not call a model or upload evidence.",
@@ -46,6 +49,33 @@ pub enum Command {
         after_help = "EXAMPLES:\n  Local command adapter (prompt is sent on stdin):\n    runsift analyze .runsift/runs/<run_id> local -- ollama run qwen3\n\n  OpenAI Responses-compatible endpoint:\n    runsift analyze .runsift/runs/<run_id> openai \\\n      --base-url https://api.openai.com/v1 \\\n      --model <MODEL> --api-key-env OPENAI_API_KEY"
     )]
     Analyze(AnalyzeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InspectArgs {
+    /// Evidence bundle created by run or import.
+    pub bundle: PathBuf,
+
+    #[command(subcommand)]
+    pub query: InspectQuery,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InspectQuery {
+    /// Show the manifest, including sources and recorded coverage.
+    Overview,
+    /// Search event messages by literal substring, including INFO and unknown levels.
+    Search {
+        text: String,
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+    },
+    /// Read a parsed event and its neighbors from the same artifact in bundle order.
+    Evidence {
+        event_id: String,
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(0..=20))]
+        around: u32,
+    },
 }
 
 #[derive(Debug, Args)]
