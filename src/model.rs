@@ -54,6 +54,8 @@ pub struct EvidenceRef {
     pub source_path: PathBuf,
     pub byte_start: u64,
     pub byte_end: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_range: Option<[u64; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

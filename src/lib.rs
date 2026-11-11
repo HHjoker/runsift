@@ -1,4 +1,5 @@
 pub mod ai;
+mod batch;
 pub mod capture;
 pub mod cli;
 pub mod crash;
@@ -6,6 +7,7 @@ pub mod diagnostics;
 pub mod git;
 pub mod importer;
 pub mod inspect;
+pub mod investigate;
 pub mod logs;
 pub mod model;
 pub mod pattern;

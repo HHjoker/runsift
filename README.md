@@ -18,7 +18,7 @@ and downstream AI concise, verifiable evidence of what happened.
 > [!IMPORTANT]
 > RunSift is at an early stage. Evidence schemas and command-line options may
 > change before `1.0`. The Rust library API is also experimental. RunSift
-> `0.4` writes evidence schema version `3` and diagnostic-context protocol
+> `0.5` writes evidence schema version `3` and diagnostic-context protocol
 > version `2`. Existing schema version `2` bundles remain readable.
 
 ## Why RunSift?

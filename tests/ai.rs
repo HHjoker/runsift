@@ -55,6 +55,7 @@ fn create_bundle(label: &str) -> PathBuf {
             source_path: "/var/log/application.log".into(),
             byte_start: 420,
             byte_end: 527,
+            artifact_range: None,
         },
     };
     let pattern = Pattern {
@@ -215,6 +216,7 @@ fn omits_lower_priority_evidence_when_the_budget_is_full() {
                 source_path: "/var/log/application.log".into(),
                 byte_start: index * 100,
                 byte_end: index * 100 + 99,
+                artifact_range: None,
             },
         });
     }

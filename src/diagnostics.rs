@@ -115,6 +115,7 @@ pub fn parse(
                     source_path: source_path.to_path_buf(),
                     byte_start: start.offset as u64,
                     byte_end: end as u64,
+                    artifact_range: None,
                 },
                 event_ids,
             }

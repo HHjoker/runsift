@@ -764,7 +764,7 @@ pub fn validate_analysis(analysis: &AnalysisResult, context: &DiagnosticContext)
     Ok(())
 }
 
-fn run_local(command: &[OsString], prompt: &str) -> Result<String> {
+pub(crate) fn run_local(command: &[OsString], prompt: &str) -> Result<String> {
     let (program, args) = command
         .split_first()
         .context("local adapter command is required after `--`")?;

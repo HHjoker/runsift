@@ -1,0 +1,5 @@
+{
+  "counts": "(?m)^batch=(?P<batch>\\S+) final stage=(?P<stage>\\w+) count=(?P<count>[0-9]+)$",
+  "completion": "(?m)^batch=(?P<batch>\\S+) completed$",
+  "stages": ["eligible", "queued", "confirmed"]
+}

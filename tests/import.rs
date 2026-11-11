@@ -79,6 +79,52 @@ SUMMARY: AddressSanitizer: heap-use-after-free
     assert_eq!(error["evidence"]["source_path"], log_path.to_str().unwrap());
     assert!(error["evidence"]["byte_start"].as_u64().unwrap() > 0);
 
+    let stack = parsed
+        .iter()
+        .find(|event| event["message"].as_str().unwrap().contains("#0 0x1000"))
+        .unwrap();
+    let evidence = runsift(&[
+        "inspect",
+        bundle.to_str().unwrap(),
+        "evidence",
+        stack["event_id"].as_str().unwrap(),
+    ]);
+    assert!(evidence.status.success(), "{:?}", evidence.stderr);
+    let evidence: Value = serde_json::from_slice(&evidence.stdout).unwrap();
+    let range = &stack["evidence"]["artifact_range"];
+    let start = range[0].as_u64().unwrap() as usize;
+    let end = range[1].as_u64().unwrap() as usize;
+    assert_ne!(
+        start as u64,
+        stack["evidence"]["byte_start"].as_u64().unwrap()
+    );
+    assert!(copied[start..end].contains("\n    #0 0x1000"));
+    assert_eq!(evidence["artifact_excerpt"]["text"], &copied[start..end]);
+
+    let investigated = runsift(&[
+        "investigate",
+        bundle.to_str().unwrap(),
+        "--question",
+        "Where did the parser fail?",
+        "--",
+        "sh",
+        "-c",
+        r#"case "$(cat)" in
+          *"artifact_excerpt"*) printf '{"action":"finish","findings":[{"statement":"A sanitizer stack was recorded","evidence_ids":["%s"]}],"gaps":[],"next_step":"Check the source line"}' "$1" ;;
+          *) printf '{"action":"evidence","event_id":"%s"}' "$1" ;;
+        esac"#,
+        "adapter",
+        stack["event_id"].as_str().unwrap(),
+    ]);
+    assert!(investigated.status.success(), "{:?}", investigated.stderr);
+    let report: Value = serde_json::from_slice(&investigated.stdout).unwrap();
+    assert_eq!(report["status"], "completed");
+    assert_eq!(
+        report["trace"][0]["result"]["event"]["event_id"],
+        stack["event_id"]
+    );
+    assert_eq!(report["findings"][0]["evidence_ids"][0], stack["event_id"]);
+
     let summary = fs::read_to_string(bundle.join("summary.md")).unwrap();
     assert!(summary.contains("# RunSift 历史日志摘要"));
     assert!(summary.contains("## 关键信息概览"));

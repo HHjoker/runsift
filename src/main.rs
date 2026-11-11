@@ -23,6 +23,7 @@ fn try_main() -> Result<i32> {
         Command::Run(args) => capture::run(args),
         Command::Import(args) => importer::run(args),
         Command::Inspect(args) => inspect::run(args),
+        Command::Investigate(args) => runsift::investigate::run(args),
         Command::Context(args) => ai::context_command(args),
         Command::Analyze(args) => ai::analyze_command(args),
     }

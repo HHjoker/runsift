@@ -1,0 +1,5 @@
+batch=A17 final stage=eligible count=9800
+batch=A17 final stage=queued count=9800
+batch=A170 final stage=confirmed count=9800
+batch=A17 final stage=confirmed count=9790
+batch=A17 completed

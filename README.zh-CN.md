@@ -14,10 +14,12 @@ RunSift 是一个本地优先、模型无关的工程诊断上下文工具。它
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段，证据格式和命令行参数在 `1.0` 之前可能调整。
-> Rust library API 目前也不保证稳定。RunSift `0.4` 生成的证据格式版本为 `3`，
+> Rust library API 目前也不保证稳定。RunSift `0.5` 生成的证据格式版本为 `3`，
 > 诊断上下文协议版本为 `2`，并继续读取旧的 schema v2 证据包。
 
 ## 为什么需要 RunSift
+
+项目定位、当前交付范围和后续计划见[运行故障调查 Agent 方案](docs/investigation-roadmap.zh-CN.md)。
 
 一次测试或程序运行失败后，开发者面对的往往是：
 
@@ -180,7 +182,36 @@ runsift inspect .runsift/cases/field-4821 evidence <EVENT_ID> --around 3
 
 三个命令都输出 JSON。搜索对已解析消息做区分大小写的子串匹配，
 不按日志级别筛除事件。回读返回解析后的事件以及同一产物中的相邻事件。
-字节偏移指向原始来源，不能直接用于切片脱敏副本。
+原始字节偏移指向来源文件。新导入的历史日志在能精确对应时还提供
+`artifact_range`，`evidence` 会从包内副本读取最多 16 KiB 的片段。
+旧证据包、实时采集包或无法精确对应的记录仍可查看解析后的事件。
+
+批次对账示例：
+
+```bash
+runsift import --case-id batch-demo examples/batch-shortfall.log
+runsift inspect .runsift/cases/batch-demo check-batch A17 --profile examples/batch-profile.json
+```
+
+配置中的正则匹配解析后的消息。计数正则需捕获 `batch`、`stage` 和
+`count`，完成正则需捕获 `batch`。阶段按处理顺序排列，要求同一案件内
+批次 ID 唯一，计数是同口径的最终快照，阶段之间预期一进一出。
+如有合法过滤，从过滤后的阶段开始对账。差额描述的是已记录计数，
+无法单凭差额确认实际数据丢失。缺少完成标记、关键计数或计数冲突时，
+输出会标明证据缺口。
+
+`investigate` 可以让用户指定的本地适配器多轮调用这些只读查询：
+
+```bash
+runsift investigate .runsift/cases/batch-demo \
+  --question 'A17 的差额出现在什么阶段？' \
+  --profile examples/batch-profile.json -- ./my-adapter
+```
+
+每轮启动一次适配器，通过 stdin 传入 JSON（包含允许的动作及已有查询结果）。
+适配器通过 stdout 返回一个 JSON 动作。最终报告输出到 stdout，包含证据引用、
+缺口和查询记录。达到轮数上限时返回状态 `round_limit`，退出码为 3。
+适配器会收到案件证据，只应指定受信任的命令。
 
 ### 捕获一次 CTest 运行
 

@@ -36,6 +36,9 @@ pub enum Command {
     /// Inspect an evidence bundle locally and return JSON.
     Inspect(InspectArgs),
 
+    /// Investigate a bundle through bounded, read-only queries and a local adapter.
+    Investigate(InvestigateArgs),
+
     #[command(
         about = "Build a token-budgeted, citation-ready AI context from a bundle",
         long_about = "Read an existing RunSift evidence bundle, select the highest-signal evidence under an approximate token budget, and generate a stable diagnostic context plus a model prompt.\n\nThis command is local-only. It does not call a model or upload evidence.",
@@ -52,6 +55,20 @@ pub enum Command {
 }
 
 #[derive(Debug, Args)]
+pub struct InvestigateArgs {
+    pub bundle: PathBuf,
+    #[arg(long)]
+    pub question: String,
+    #[arg(long)]
+    pub profile: Option<PathBuf>,
+    #[arg(long, default_value_t = 6, value_parser = clap::value_parser!(u32).range(1..=12))]
+    pub max_rounds: u32,
+    /// Local adapter command. Pass it after --.
+    #[arg(last = true, required = true, allow_hyphen_values = true)]
+    pub command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
 pub struct InspectArgs {
     /// Evidence bundle created by run or import.
     pub bundle: PathBuf,
@@ -62,6 +79,12 @@ pub struct InspectArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum InspectQuery {
+    /// Compare final counts across configured stages for one completed batch.
+    CheckBatch {
+        batch_id: String,
+        #[arg(long)]
+        profile: PathBuf,
+    },
     /// Show the manifest, including sources and recorded coverage.
     Overview,
     /// Search event messages by literal substring, including INFO and unknown levels.

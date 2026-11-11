@@ -30,6 +30,7 @@ fn stacktrace_does_not_split_the_error_pattern() {
             source_path: "app.log".into(),
             byte_start: 0,
             byte_end: 1,
+            artifact_range: None,
         },
     };
     let patterns = pattern::aggregate(&[

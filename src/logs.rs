@@ -207,15 +207,21 @@ pub fn import_file(
         profile,
         context,
     };
-    let events = parse_event_bytes(path, &artifact, 0, &bytes, &options);
+    let mut events = parse_event_bytes(path, &artifact, 0, &bytes, &options);
     let sha256 = Sha256::digest(&bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
     let size = bytes.len() as u64;
     let content = if redact_enabled {
-        redact::text(&raw_content, true).into_bytes()
+        let content = redact::text(&raw_content, true).into_bytes();
+        map_artifact_ranges(&bytes, &content, &mut events);
+        content
     } else {
+        for event in &mut events {
+            event.evidence.artifact_range =
+                Some([event.evidence.byte_start, event.evidence.byte_end]);
+        }
         bytes
     };
 
@@ -241,6 +247,39 @@ pub fn import_file(
             }],
         },
     })
+}
+
+fn map_artifact_ranges(original: &[u8], artifact: &[u8], events: &mut [Event]) {
+    let mut source_end = 0;
+    let mut artifact_end = 0;
+    let mut ranges = Vec::with_capacity(events.len());
+    let mut advance = |end| {
+        let text = String::from_utf8_lossy(&original[source_end..end]);
+        let redacted = redact::text(&text, true);
+        let next = artifact_end + redacted.len();
+        if artifact.get(artifact_end..next) != Some(redacted.as_bytes()) {
+            return None;
+        }
+        source_end = end;
+        artifact_end = next;
+        Some(next as u64)
+    };
+    for event in events.iter() {
+        let Some(start) = advance(event.evidence.byte_start as usize) else {
+            return;
+        };
+        let Some(end) = advance(event.evidence.byte_end as usize) else {
+            return;
+        };
+        ranges.push([start, end]);
+    }
+    // Redaction can span multiple records. Publish ranges only if the slices
+    // collectively reproduce the full-file redaction.
+    if advance(original.len()) == Some(artifact.len() as u64) {
+        for (event, range) in events.iter_mut().zip(ranges) {
+            event.evidence.artifact_range = Some(range);
+        }
+    }
 }
 
 pub fn parse_events(
@@ -354,6 +393,7 @@ fn parse_event_bytes(
                     source_path: source_path.to_owned(),
                     byte_start: absolute_start,
                     byte_end: absolute_end,
+                    artifact_range: None,
                 },
             }
         })
